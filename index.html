@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mishra's Thirteen — FPL Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <div>
+        <div class="eyebrow">Live Dashboard</div>
+        <h1>MISHRA&apos;S THIRTEEN</h1>
+      </div>
+      <div class="header-right">
+        <span id="gw-badge" class="badge">Loading…</span>
+        <span id="updated-badge" class="updated">Not yet synced</span>
+      </div>
+    </header>
+
+    <section id="squad-section" class="card" hidden>
+      <div class="card-title">My Squad · GW<span id="squad-gw"></span></div>
+      <div id="squad-list" class="squad-list"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">Fixture Difficulty — next 6 gameweeks</div>
+      <div class="fdr-key">
+        <span><i style="background:#1F7A4D"></i>Easiest</span>
+        <span><i style="background:#34B871"></i></span>
+        <span><i style="background:#5B6B62"></i></span>
+        <span><i style="background:#C1443C"></i></span>
+        <span><i style="background:#8A2C26"></i>Hardest</span>
+      </div>
+      <div id="fixture-ticker" class="fixture-ticker"></div>
+    </section>
+
+    <section class="card">
+      <div class="filters">
+        <input id="search" type="text" placeholder="Search player…" />
+        <select id="pos-filter">
+          <option value="">All positions</option>
+          <option value="GKP">GKP</option>
+          <option value="DEF">DEF</option>
+          <option value="MID">MID</option>
+          <option value="FWD">FWD</option>
+        </select>
+        <select id="team-filter"><option value="">All teams</option></select>
+        <select id="status-filter">
+          <option value="">All statuses</option>
+          <option value="a">Available only</option>
+          <option value="flag">Flagged (injury/doubt)</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table id="player-table">
+          <thead>
+            <tr>
+              <th data-key="name">Player</th>
+              <th data-key="team">Team</th>
+              <th data-key="pos">Pos</th>
+              <th data-key="price">Price</th>
+              <th data-key="selected_by">Own%</th>
+              <th data-key="form">Form</th>
+              <th data-key="total_points">Pts</th>
+              <th data-key="ppm">PPM</th>
+              <th data-key="ict_index">ICT</th>
+              <th data-key="xgi">xGI</th>
+              <th data-key="def_con_p90">DC/90</th>
+              <th data-key="status">Status</th>
+            </tr>
+          </thead>
+          <tbody id="player-rows"></tbody>
+        </table>
+      </div>
+      <div id="row-count" class="row-count"></div>
+    </section>
+
+    <footer class="footer">Data from the official Fantasy Premier League API · refreshes automatically via GitHub Actions</footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
