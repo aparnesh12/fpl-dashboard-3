@@ -532,7 +532,7 @@ def build_mini_league(config, current_gw):
     }
 
 
-
+def build_squad(config, current_gw):
     team_id = config.get("fpl_team_id")
     if not team_id:
         return None
