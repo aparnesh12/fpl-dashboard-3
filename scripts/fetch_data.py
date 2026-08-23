@@ -12,8 +12,9 @@ import io
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+import pulp
 import requests
 
 BASE = "https://fantasy.premierleague.com/api"
@@ -25,6 +26,8 @@ FIXTURE_WINDOW = 6       # how many gameweeks ahead the fixture ticker shows
 PREDICT_WINDOW = 5       # how many gameweeks ahead "predicted next-5" covers
 RECS_PER_POSITION = 12   # how many players per position on the Recommendations tab
 MIN_HISTORY_MATCHES = 2  # need at least this many past meetings before trusting a history bonus
+SQUAD_QUOTAS = {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
+FORMATIONS = [(d, m, f) for d in range(3, 6) for m in range(2, 6) for f in [10 - d - m] if 1 <= f <= 3]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
@@ -311,12 +314,231 @@ def build_recommendations(players, teams_by_id, squad_element_ids):
     return out
 
 
-def build_squad(config, current_gw):
+def optimize_squad(players, budget, objective_key="pred_next5"):
+    """ILP-optimal 15-man squad: maximizes total objective_key subject to the
+    real FPL constraints (2/5/5/3 by position, <=3 per club, total cost <=
+    budget). Excludes injured/suspended/unavailable players from the pool —
+    picking them would only ever be a budget-saving trick, not a genuine
+    scoring decision, and this keeps the objective honest."""
+    pool = [p for p in players if p["status"] not in ("u", "i", "s")]
+    prob = pulp.LpProblem("squad", pulp.LpMaximize)
+    x = {p["id"]: pulp.LpVariable(f"x_{p['id']}", cat="Binary") for p in pool}
+
+    prob += pulp.lpSum(x[p["id"]] * p[objective_key] for p in pool)
+    for pos, n in SQUAD_QUOTAS.items():
+        prob += pulp.lpSum(x[p["id"]] for p in pool if p["pos"] == pos) == n
+    prob += pulp.lpSum(x[p["id"]] * p["price"] for p in pool) <= budget
+    for team_id in {p["team_id"] for p in pool}:
+        prob += pulp.lpSum(x[p["id"]] for p in pool if p["team_id"] == team_id) <= 3
+
+    status = prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    if pulp.LpStatus[status] != "Optimal":
+        return None
+    return [p for p in pool if x[p["id"]].value() == 1]
+
+
+def best_starting_xi(squad, objective_key="pred_next5"):
+    """Given a fixed 15-man squad, searches standard formations (3-5 DEF,
+    2-5 MID, 1-3 FWD, summing to 10 outfield) and returns whichever lineup
+    maximizes total objective_key. Captain is simply the single highest
+    scorer in the squad (they're guaranteed a starting slot in an optimal
+    lineup, since benching your best player is never correct)."""
+    by_pos = {"GKP": [], "DEF": [], "MID": [], "FWD": []}
+    for p in squad:
+        by_pos.setdefault(p["pos"], []).append(p)
+    for pos in by_pos:
+        by_pos[pos].sort(key=lambda p: p[objective_key], reverse=True)
+
+    best = None
+    for d, m, f in FORMATIONS:
+        if len(by_pos["DEF"]) < d or len(by_pos["MID"]) < m or len(by_pos["FWD"]) < f:
+            continue
+        xi = [by_pos["GKP"][0]] + by_pos["DEF"][:d] + by_pos["MID"][:m] + by_pos["FWD"][:f]
+        total = sum(p[objective_key] for p in xi)
+        if best is None or total > best["total"]:
+            bench_gk = by_pos["GKP"][1:2]
+            bench_outfield = by_pos["DEF"][d:] + by_pos["MID"][m:] + by_pos["FWD"][f:]
+            best = {
+                "formation": f"{d}-{m}-{f}",
+                "xi": xi,
+                "bench": bench_gk + bench_outfield,
+                "total": round(total, 1),
+            }
+    if best:
+        best["captain"] = max(best["xi"], key=lambda p: p[objective_key])
+    return best
+
+
+def slim_player(p):
+    return {"id": p["id"], "name": p["name"], "team": p["team"], "pos": p["pos"], "price": p["price"],
+            "pred_next": p["pred_next"], "pred_next5": p["pred_next5"], "status": p["status"]}
+
+
+def build_chip_squads(players, budget):
+    """Optimal Wildcard squad (maximizes the next-5-gameweek run, since a
+    wildcard's picks persist) and optimal Free Hit squad (maximizes just the
+    next gameweek, since Free Hit reverts after one week — a squad built for
+    a single-week spike is a genuinely different answer, not the same squad
+    relabelled)."""
+    out = {}
+    for label, objective in [("wildcard", "pred_next5"), ("free_hit", "pred_next")]:
+        squad = optimize_squad(players, budget, objective_key=objective)
+        if not squad:
+            out[label] = None
+            continue
+        lineup = best_starting_xi(squad, objective_key=objective)
+        out[label] = {
+            "budget_used": round(sum(p["price"] for p in squad), 1),
+            "budget_available": round(budget, 1),
+            "formation": lineup["formation"],
+            "starting_xi": [slim_player(p) for p in lineup["xi"]],
+            "bench": [slim_player(p) for p in lineup["bench"]],
+            "captain": slim_player(lineup["captain"]),
+            "projected_points": lineup["total"],
+        }
+    return out
+
+
+def build_team_rating(squad, players_by_id, all_players):
+    """0-100 squad rating: scoring strength (vs a theoretical best-possible
+    XV under the same quotas), value efficiency (squad's avg PPM vs the
+    league's), availability (share of the 15 that are actually fit), and
+    captaincy quality (is the armband on the squad's actual best starter).
+    Every component is a simple, checkable ratio — no hidden weighting
+    beyond the four numbers stated alongside the total."""
+    if not squad or not squad.get("picks"):
+        return None
+    picks = squad["picks"]
+    squad_players = [players_by_id[p["element"]] for p in picks if p["element"] in players_by_id]
+    if len(squad_players) < 15:
+        return None
+    starters = [players_by_id[p["element"]] for p in picks if p["multiplier"] > 0 and p["element"] in players_by_id]
+    captain_pick = next((p for p in picks if p["is_captain"]), None)
+    captain_player = players_by_id.get(captain_pick["element"]) if captain_pick else None
+
+    by_pos = {"GKP": [], "DEF": [], "MID": [], "FWD": []}
+    for p in all_players:
+        if p["status"] != "u":
+            by_pos.setdefault(p["pos"], []).append(p)
+    for pos in by_pos:
+        by_pos[pos].sort(key=lambda p: p["pred_next5"], reverse=True)
+    best_possible = sum(sum(p["pred_next5"] for p in by_pos[pos][:n]) for pos, n in SQUAD_QUOTAS.items())
+    squad_total = sum(p["pred_next5"] for p in squad_players)
+    scoring_score = min(100, (squad_total / best_possible) * 100) if best_possible else 0
+
+    active_league = [p for p in all_players if p["minutes"] > 0]
+    league_avg_ppm = (sum(p["ppm"] for p in active_league) / len(active_league)) if active_league else 1
+    squad_active = [p for p in squad_players if p["minutes"] > 0]
+    squad_avg_ppm = (sum(p["ppm"] for p in squad_active) / len(squad_active)) if squad_active else 0
+    value_score = min(100, max(0, 50 + (squad_avg_ppm - league_avg_ppm) / league_avg_ppm * 100)) if league_avg_ppm else 50
+
+    availability_score = (sum(1 for p in squad_players if p["status"] == "a") / len(squad_players)) * 100
+
+    if captain_player and starters:
+        best_starter_pred = max(p["pred_next"] for p in starters)
+        captaincy_score = 100 if best_starter_pred <= 0 else min(100, (captain_player["pred_next"] / best_starter_pred) * 100)
+    else:
+        captaincy_score = 50
+
+    overall = round(0.35 * scoring_score + 0.25 * value_score + 0.25 * availability_score + 0.15 * captaincy_score, 1)
+    best_captain = max(starters, key=lambda p: p["pred_next"]) if starters else None
+
+    return {
+        "overall": overall,
+        "components": {
+            "scoring_strength": round(scoring_score, 1),
+            "value_efficiency": round(value_score, 1),
+            "availability": round(availability_score, 1),
+            "captaincy": round(captaincy_score, 1),
+        },
+        "squad_total_pred_next5": round(squad_total, 1),
+        "best_possible_pred_next5": round(best_possible, 1),
+        "flagged_players": [{"name": p["name"], "status_label": p["status_label"]} for p in squad_players if p["status"] != "a"],
+        "captain_name": captain_player["name"] if captain_player else None,
+        "best_captain_option": best_captain["name"] if best_captain else None,
+        "captain_is_optimal": bool(captain_player and best_captain and captain_player["id"] == best_captain["id"]),
+    }
+
+
+MINI_LEAGUE_HISTORY_FILE = "mini_league_history.json"
+
+
+def build_mini_league(config, current_gw):
+    """Pulls live standings for a configured classic mini-league and keeps
+    one snapshot per day in data/mini_league_history.json, which the Action
+    commits back to the repo each run — so a real week-by-week trend builds
+    up naturally over the season. Pattern recognition and rival 'personas'
+    need that accumulated history to mean anything; with only a snapshot or
+    two so far, this deliberately just shows standings plus movement vs a
+    week ago once there's a week ago to compare against."""
+    league_id = config.get("mini_league_id")
+    if not league_id:
+        return None
+    try:
+        data = get(f"{BASE}/leagues-classic/{league_id}/standings/")
+    except requests.RequestException as exc:
+        print(f"Warning: could not fetch mini league {league_id}: {exc}", file=sys.stderr)
+        return None
+
+    league_name = data.get("league", {}).get("name", "")
+    standings = [
+        {
+            "entry": r["entry"],
+            "entry_name": r["entry_name"],
+            "player_name": r["player_name"],
+            "rank": r["rank"],
+            "last_rank": r.get("last_rank"),
+            "total": r["total"],
+            "event_total": r["event_total"],
+        }
+        for r in data.get("standings", {}).get("results", [])
+    ]
+
+    history_path = os.path.join(DATA_DIR, MINI_LEAGUE_HISTORY_FILE)
+    history = []
+    if os.path.exists(history_path):
+        try:
+            with open(history_path) as f:
+                history = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            history = []
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    history = [h for h in history if h.get("date") != today]  # one snapshot per day
+    history.append({"date": today, "gw": current_gw, "standings": standings})
+    history = history[-60:]
+
+    with open(history_path, "w") as f:
+        json.dump(history, f)
+
+    trend = {}
+    if len(history) >= 2:
+        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+        candidates = [h for h in history if h["date"] <= cutoff]
+        week_ago = candidates[-1] if candidates else history[0]
+        if week_ago is not history[-1]:
+            prev_rank = {s["entry"]: s["rank"] for s in week_ago["standings"]}
+            trend = {
+                str(s["entry"]): (prev_rank[s["entry"]] - s["rank"])
+                for s in standings if s["entry"] in prev_rank
+            }
+
+    return {
+        "league_id": league_id,
+        "league_name": league_name,
+        "standings": standings,
+        "trend_vs_week_ago": trend,
+        "snapshots_recorded": len(history),
+    }
+
+
+
     team_id = config.get("fpl_team_id")
     if not team_id:
         return None
     try:
         picks_data = get(f"{BASE}/entry/{team_id}/event/{current_gw}/picks/")
+        entry_history = picks_data.get("entry_history", {}) or {}
         return {
             "gw": current_gw,
             "picks": [
@@ -330,6 +552,8 @@ def build_squad(config, current_gw):
                 for p in picks_data.get("picks", [])
             ],
             "active_chip": picks_data.get("active_chip"),
+            "bank": entry_history.get("bank", 0) / 10,
+            "squad_value": entry_history.get("value", 1000) / 10,
         }
     except requests.RequestException as exc:
         print(f"Warning: could not fetch squad for team {team_id}: {exc}", file=sys.stderr)
@@ -365,8 +589,17 @@ def main():
     history_data = build_history_lookup()
 
     players = build_players(bootstrap, fixtures, teams_by_id, current_gw, ict_pending, history_data)
+    players_by_id = {p["id"]: p for p in players}
     fixture_ticker = build_fixture_ticker(fixtures, teams_by_id)
     recommendations = build_recommendations(players, teams_by_id, squad_element_ids)
+
+    print("Rating squad and building chip-optimal lineups...")
+    team_rating = build_team_rating(squad, players_by_id, players)
+    wildcard_budget = squad["bank"] + squad["squad_value"] if squad else 100.0
+    chip_squads = build_chip_squads(players, wildcard_budget)
+
+    print("Fetching mini league (if configured)...")
+    mini_league = build_mini_league(config, current_gw)
 
     with open(os.path.join(DATA_DIR, "players.json"), "w") as f:
         json.dump(players, f)
@@ -380,12 +613,22 @@ def main():
     with open(os.path.join(DATA_DIR, "recommendations.json"), "w") as f:
         json.dump(recommendations, f)
 
+    with open(os.path.join(DATA_DIR, "team_rating.json"), "w") as f:
+        json.dump(team_rating, f)
+
+    with open(os.path.join(DATA_DIR, "chip_squads.json"), "w") as f:
+        json.dump(chip_squads, f)
+
+    with open(os.path.join(DATA_DIR, "mini_league.json"), "w") as f:
+        json.dump(mini_league, f)
+
     meta = {
         "last_updated": datetime.now(timezone.utc).isoformat(),
         "current_gw": current_gw,
         "gw_deadline": (next_event or current_event or {}).get("deadline_time"),
         "ict_pending": ict_pending,
         "history_seasons_used": history_data[2],
+        "my_entry_id": config.get("fpl_team_id"),
         "squad": squad,
     }
     with open(os.path.join(DATA_DIR, "meta.json"), "w") as f:

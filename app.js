@@ -3,6 +3,9 @@ const state = {
   teams: [],
   fixtures: {},
   recommendations: {},
+  teamRating: null,
+  chipSquads: null,
+  miniLeague: null,
   meta: {},
   sortKey: 'pred_next5',
   sortDir: 'desc',
@@ -35,6 +38,7 @@ const COLUMNS = [
 ];
 
 let activeRecPos = 'MID';
+let activeChipTab = 'wildcard';
 
 async function loadJSON(path) {
   const res = await fetch(path + '?t=' + Date.now());
@@ -55,19 +59,84 @@ function escapeAttr(str) {
   return escapeHtml(str).replace(/"/g, '&quot;');
 }
 
+/* ---------- Floating tooltip layer ----------
+   Deliberately NOT a ::after on the element itself. Headers and status
+   badges live inside .table-wrap, which has overflow-x/y:auto for the
+   horizontal-scrolling table — any ::after tooltip on a descendant gets
+   clipped the instant it would extend past the currently-scrolled-into-
+   view area, which is exactly the "have to scroll right to read it"
+   problem. A single fixed-position layer outside that scroll container,
+   repositioned via getBoundingClientRect, has no such ceiling. */
+const tooltipLayer = document.createElement('div');
+tooltipLayer.className = 'tooltip-layer';
+document.body.appendChild(tooltipLayer);
+let activeTipAnchor = null;
+
+function positionTooltip(anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const tw = tooltipLayer.offsetWidth || 250;
+  const th = tooltipLayer.offsetHeight || 40;
+  let left = rect.left;
+  let top = rect.bottom + 8;
+  if (left + tw > window.innerWidth - 8) left = window.innerWidth - tw - 8;
+  if (left < 8) left = 8;
+  if (top + th > window.innerHeight - 8) top = rect.top - th - 8;
+  tooltipLayer.style.left = left + 'px';
+  tooltipLayer.style.top = top + 'px';
+}
+
+function showTooltip(anchor) {
+  const text = anchor.getAttribute('data-tip');
+  if (!text) return;
+  tooltipLayer.textContent = text;
+  tooltipLayer.classList.add('visible');
+  activeTipAnchor = anchor;
+  positionTooltip(anchor);
+}
+
+function hideTooltip() {
+  tooltipLayer.classList.remove('visible');
+  activeTipAnchor = null;
+}
+
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('[data-tip]');
+  if (el) showTooltip(el);
+});
+document.addEventListener('mouseout', (e) => {
+  const el = e.target.closest('[data-tip]');
+  if (el && el === activeTipAnchor) hideTooltip();
+});
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-tip]');
+  if (el) {
+    activeTipAnchor === el ? hideTooltip() : showTooltip(el);
+  } else if (activeTipAnchor) {
+    hideTooltip();
+  }
+});
+window.addEventListener('scroll', () => { if (activeTipAnchor) positionTooltip(activeTipAnchor); }, true);
+window.addEventListener('resize', () => { if (activeTipAnchor) positionTooltip(activeTipAnchor); });
+
 async function init() {
   try {
-    const [players, teams, fixtures, recommendations, meta] = await Promise.all([
+    const [players, teams, fixtures, recommendations, teamRating, chipSquads, miniLeague, meta] = await Promise.all([
       loadJSON('data/players.json'),
       loadJSON('data/teams.json'),
       loadJSON('data/fixtures.json'),
       loadJSON('data/recommendations.json'),
+      loadJSON('data/team_rating.json').catch(() => null),
+      loadJSON('data/chip_squads.json').catch(() => null),
+      loadJSON('data/mini_league.json').catch(() => null),
       loadJSON('data/meta.json'),
     ]);
     state.players = players;
     state.teams = teams;
     state.fixtures = fixtures;
     state.recommendations = recommendations;
+    state.teamRating = teamRating;
+    state.chipSquads = chipSquads;
+    state.miniLeague = miniLeague;
     state.meta = meta;
 
     renderMeta();
@@ -78,6 +147,10 @@ async function init() {
     renderTable();
     renderRecsTabs();
     renderRecsList();
+    renderMyTeam();
+    renderChipsTabs();
+    renderChipsContent();
+    renderMiniLeague();
   } catch (err) {
     document.getElementById('gw-badge').textContent = 'Data unavailable';
     console.error(err);
@@ -117,17 +190,6 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
   });
 });
 
-/* ---------- Tap-to-toggle tooltips (desktop still gets CSS :hover free) ---------- */
-document.addEventListener('click', (e) => {
-  const tipEl = e.target.closest('[data-tip]');
-  document.querySelectorAll('.tip-active').forEach((el) => {
-    if (el !== tipEl) el.classList.remove('tip-active');
-  });
-  if (tipEl) {
-    tipEl.classList.toggle('tip-active');
-  }
-});
-
 /* ---------- Squad ---------- */
 function renderSquad() {
   const squad = state.meta.squad;
@@ -158,7 +220,15 @@ function renderSquad() {
     });
 }
 
-/* ---------- My Players' fixture ticker (Overview tab) ---------- */
+/* ---------- My Players' fixture ticker (Overview tab), with a quantitative score ---------- */
+function fixtureScoreColor(avg) {
+  if (avg <= 1.75) return '#1F7A4D';
+  if (avg <= 2.5) return '#34B871';
+  if (avg <= 3.25) return '#5B6B62';
+  if (avg <= 4.0) return '#C1443C';
+  return '#8A2C26';
+}
+
 function renderMyFixtureTicker() {
   const wrap = document.getElementById('my-fixture-ticker');
   const squad = state.meta.squad;
@@ -183,9 +253,22 @@ function renderMyFixtureTicker() {
       label.textContent = p.name;
       row.appendChild(label);
 
+      const fixList = state.fixtures[p.team_id] || [];
+      const avg = fixList.length ? fixList.reduce((s, f) => s + f.difficulty, 0) / fixList.length : null;
+      const scoreEl = document.createElement('div');
+      scoreEl.className = 'ticker-score';
+      if (avg !== null) {
+        scoreEl.style.background = fixtureScoreColor(avg);
+        scoreEl.textContent = avg.toFixed(1);
+        scoreEl.setAttribute('data-tip', `Average difficulty across ${fixList.length} upcoming fixture${fixList.length === 1 ? '' : 's'}. Lower is easier.`);
+      } else {
+        scoreEl.style.background = '#5B6B62';
+        scoreEl.textContent = '—';
+      }
+      row.appendChild(scoreEl);
+
       const cellsWrap = document.createElement('div');
       cellsWrap.className = 'ticker-cells';
-      const fixList = state.fixtures[p.team_id] || [];
       if (!fixList.length) {
         const cell = document.createElement('div');
         cell.className = 'ticker-cell';
@@ -198,7 +281,7 @@ function renderMyFixtureTicker() {
         cell.className = 'ticker-cell';
         cell.style.background = DIFFICULTY_COLORS[f.difficulty] || '#5B6B62';
         cell.textContent = (f.is_home ? '' : '@') + f.opponent;
-        cell.title = `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`;
+        cell.setAttribute('data-tip', `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`);
         cellsWrap.appendChild(cell);
       });
       row.appendChild(cellsWrap);
@@ -364,6 +447,157 @@ function renderRecsList() {
     `;
     wrap.appendChild(row);
   });
+}
+
+/* ---------- My Team ---------- */
+function renderMyTeam() {
+  const wrap = document.getElementById('myteam-content');
+  const rating = state.teamRating;
+  if (!rating) {
+    wrap.innerHTML = '<p class="empty-hint">Add your Team ID to config.json to rate your squad.</p>';
+    return;
+  }
+  const tier = rating.overall >= 70 ? '' : rating.overall >= 45 ? 'mid' : 'low';
+  const label = rating.overall >= 80 ? 'Excellent squad — strong across the board.'
+    : rating.overall >= 65 ? 'Solid squad with room to sharpen.'
+    : rating.overall >= 45 ? 'Average — a few clear upgrade paths.'
+    : 'Struggling — worth a serious look at transfers.';
+
+  const comps = [
+    ['Scoring Strength', rating.components.scoring_strength,
+      `Your 15's predicted points vs the best possible squad under the same position quotas (${rating.squad_total_pred_next5} of ${rating.best_possible_pred_next5} predicted pts, next 5 GWs).`],
+    ['Value Efficiency', rating.components.value_efficiency,
+      "Your squad's average points-per-million vs the league-wide average among players who've actually played minutes."],
+    ['Availability', rating.components.availability,
+      `${rating.flagged_players.length} of 15 players currently flagged (injured, doubtful, or suspended).`],
+    ['Captaincy', rating.components.captaincy,
+      rating.captain_is_optimal ? 'Your captain is your squad\u2019s best starting option right now.' : `Your captain (${rating.captain_name}) isn\u2019t your highest predicted scorer \u2014 ${rating.best_captain_option} is, for next gameweek.`],
+  ];
+
+  let html = `
+    <div class="rating-hero">
+      <div class="rating-score ${tier}">${rating.overall}</div>
+      <div class="rating-label">${escapeHtml(label)}</div>
+    </div>
+    <div class="rating-components">
+      ${comps.map(([lbl, val, note]) => `
+        <div class="rating-bar-wrap" data-tip="${escapeAttr(note)}">
+          <div class="rating-bar-label"><span>${escapeHtml(lbl)}</span><span>${val.toFixed(0)}</span></div>
+          <div class="rating-bar-track"><div class="rating-bar-fill" style="width:${Math.max(0, Math.min(100, val))}%"></div></div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  if (!rating.captain_is_optimal && rating.best_captain_option) {
+    html += `<div class="rating-note">Consider captaining ${escapeHtml(rating.best_captain_option)} instead of ${escapeHtml(rating.captain_name)} for next gameweek \u2014 higher predicted points.</div>`;
+  }
+  if (rating.flagged_players.length) {
+    html += `<div class="rating-flagged">Flagged: ${rating.flagged_players.map((p) => `${escapeHtml(p.name)} (${escapeHtml(p.status_label)})`).join(', ')}</div>`;
+  }
+  wrap.innerHTML = html;
+}
+
+/* ---------- Chip Squad ---------- */
+function renderChipsTabs() {
+  const wrap = document.getElementById('chips-tabs');
+  wrap.innerHTML = '';
+  [['wildcard', 'Wildcard'], ['free_hit', 'Free Hit']].forEach(([key, label]) => {
+    const btn = document.createElement('button');
+    btn.className = 'recs-pos-btn' + (key === activeChipTab ? ' active' : '');
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      activeChipTab = key;
+      renderChipsTabs();
+      renderChipsContent();
+    });
+    wrap.appendChild(btn);
+  });
+}
+
+function lineupChipHtml(p, isBench, isCaptain) {
+  return `<div class="lineup-chip${isBench ? ' bench' : ''}${isCaptain ? ' captain' : ''}">
+    <span class="lc-name">${escapeHtml(p.name)}${isCaptain ? ' (C)' : ''}</span>
+    <span class="lc-pts">${(p.pred_next5 ?? 0).toFixed(1)}</span>
+  </div>`;
+}
+
+function renderChipsContent() {
+  const wrap = document.getElementById('chips-content');
+  const data = state.chipSquads && state.chipSquads[activeChipTab];
+  if (!data) {
+    wrap.innerHTML = '<p class="empty-hint">Needs your Team ID configured (for the budget) and the Action to have run with the optimizer.</p>';
+    return;
+  }
+  const byPos = { GKP: [], DEF: [], MID: [], FWD: [] };
+  data.starting_xi.forEach((p) => byPos[p.pos].push(p));
+
+  let html = `<div class="chip-summary">
+    <span>Formation: <b>${escapeHtml(data.formation)}</b></span>
+    <span>Budget: <b>£${data.budget_used.toFixed(1)}m</b> / £${data.budget_available.toFixed(1)}m</span>
+    <span>Projected: <b>${data.projected_points.toFixed(1)} pts</b></span>
+    <span>Captain: <b>${escapeHtml(data.captain.name)}</b></span>
+  </div>`;
+
+  ['GKP', 'DEF', 'MID', 'FWD'].forEach((pos) => {
+    if (!byPos[pos].length) return;
+    html += `<div class="lineup-pos-group"><div class="lineup-pos-label">${pos}</div><div class="lineup-players">`;
+    html += byPos[pos].map((p) => lineupChipHtml(p, false, p.id === data.captain.id)).join('');
+    html += `</div></div>`;
+  });
+
+  html += `<div class="lineup-pos-group"><div class="lineup-pos-label">Bench</div><div class="lineup-players">`;
+  html += data.bench.map((p) => lineupChipHtml(p, true, false)).join('');
+  html += `</div></div>`;
+
+  wrap.innerHTML = html;
+}
+
+/* ---------- Mini League ---------- */
+function renderMiniLeague() {
+  const titleEl = document.getElementById('league-title');
+  const wrap = document.getElementById('league-content');
+  const league = state.miniLeague;
+  if (!league) {
+    wrap.innerHTML = '<p class="empty-hint">Configure mini_league_id in config.json to track a league.</p>';
+    return;
+  }
+  titleEl.textContent = league.league_name || 'Mini League';
+  const myId = state.meta.my_entry_id;
+  const hasTrend = league.trend_vs_week_ago && Object.keys(league.trend_vs_week_ago).length > 0;
+
+  let html = '';
+  if (league.snapshots_recorded < 8) {
+    html += `<p class="rec-explainer" style="margin-bottom:14px;">Recording one snapshot a day (${league.snapshots_recorded} so far). Week-over-week movement, pattern recognition, and rival profiles all need real history to accumulate \u2014 they'll fill in automatically as the season goes, nothing to do on your end.</p>`;
+  }
+
+  html += `<div class="table-wrap" style="max-height:none;"><table class="league-table"><thead><tr>
+    <th>Rank</th><th>GW\u2194</th><th>7-Day</th><th>Team</th><th>Manager</th><th>GW Pts</th><th>Total</th>
+  </tr></thead><tbody>`;
+
+  league.standings.forEach((s) => {
+    const gwMove = (s.last_rank != null) ? (s.last_rank - s.rank) : null;
+    const gwMoveHtml = gwMove === null ? '<span class="move-flat">\u2014</span>'
+      : gwMove > 0 ? `<span class="move-up">\u25B2${gwMove}</span>`
+      : gwMove < 0 ? `<span class="move-down">\u25BC${Math.abs(gwMove)}</span>`
+      : '<span class="move-flat">\u2014</span>';
+    const weekMove = hasTrend ? league.trend_vs_week_ago[String(s.entry)] : undefined;
+    const weekMoveHtml = (weekMove === undefined || weekMove === null) ? '<span class="move-flat">\u2014</span>'
+      : weekMove > 0 ? `<span class="move-up">\u25B2${weekMove}</span>`
+      : weekMove < 0 ? `<span class="move-down">\u25BC${Math.abs(weekMove)}</span>`
+      : '<span class="move-flat">flat</span>';
+    html += `<tr class="${s.entry === myId ? 'is-you' : ''}">
+      <td>${s.rank}</td>
+      <td>${gwMoveHtml}</td>
+      <td>${weekMoveHtml}</td>
+      <td class="lt-name">${escapeHtml(s.entry_name)}${s.entry === myId ? ' (you)' : ''}</td>
+      <td>${escapeHtml(s.player_name)}</td>
+      <td>${s.event_total}</td>
+      <td>${s.total}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
 }
 
 init();
