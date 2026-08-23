@@ -14,13 +14,43 @@ API itself.
 
 ## What you get
 
-- Every player in the game: price, ownership%, form, total points,
-  points-per-million (PPM), ICT index, xGI, defensive contribution per 90,
-  and live injury/availability flags
-- Sortable, filterable table (search, position, team, status)
-- A fixture-difficulty ticker for all 20 teams, 6 gameweeks out
-- Your own squad highlighted at the top, if you add your Team ID
-- Auto-refreshes every 3 hours, no maintenance required
+Three tabs:
+
+- **Overview** — your squad, and a fixture-difficulty ticker for *your own
+  players* (not all 20 teams), 6 gameweeks out
+- **All Players** — every player in the game: price, ownership%, form,
+  total points, PPM, ICT, xGI, defensive contribution per 90, and two
+  predicted-points columns (next gameweek, next 5). Sortable (click any
+  header), filterable (search/position/team/status), header tooltips
+  explain every stat, the header row stays visible while you scroll, and
+  flagged players show why (injured/doubtful/suspended, with FPL's own
+  chance-of-playing % where available)
+- **Recommendations** — top players per position, ranked by predicted
+  points over the next 5 gameweeks, with your own squad marked. The
+  ranking includes a history adjustment for players who've faced their
+  next opponent before, pulled from the last two completed seasons'
+  actual results (see "Where the history data comes from" below)
+
+Auto-refreshes every 3 hours, no maintenance required. Predicted points are
+a transparent formula (form × fixture difficulty × minutes-reliability,
+plus the history adjustment), documented in the "Next 5" column tooltip
+and in `scripts/fetch_data.py` — not a trained model, so you can see
+exactly why a number is what it is.
+
+## Where the history data comes from
+
+The live FPL API only exposes the *current* season's match-by-match
+detail — there's no "how did this player do against Chelsea last year"
+endpoint. For that, the script pulls from
+[vaastav/Fantasy-Premier-League](https://github.com/vaastav/Fantasy-Premier-League),
+a long-running, publicly maintained archive of gameweek-by-gameweek FPL
+data going back years. It's a separate, best-effort fetch: if that repo is
+ever unreachable or restructures its files, the script logs a warning and
+carries on without the history adjustment rather than failing the whole
+run. Matching between this season's players and the archive is done by
+full name (FPL's internal player ID isn't stable across seasons), so a
+handful of players with unusual name formatting might not match — that's
+a known, minor limitation, not a bug to chase.
 
 ## One-time setup
 
