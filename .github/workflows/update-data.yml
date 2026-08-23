@@ -1,6 +1,6 @@
 name: Update FPL Data
 
-on:
+"on":
   schedule:
     # Every 3 hours. GitHub may delay scheduled runs slightly at busy times —
     # that's normal. Adjust the cron expression below to change cadence.
