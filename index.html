@@ -28,6 +28,8 @@
       <button class="tab-btn" data-tab="myteam" role="tab" aria-selected="false">My Team</button>
       <button class="tab-btn" data-tab="chips" role="tab" aria-selected="false">Chip Squad</button>
       <button class="tab-btn" data-tab="league" role="tab" aria-selected="false">Mini League</button>
+      <button class="tab-btn" data-tab="stats" role="tab" aria-selected="false">Attacking/Defending</button>
+      <button class="tab-btn" data-tab="prices" role="tab" aria-selected="false">Price Changes</button>
     </nav>
 
     <!-- OVERVIEW TAB -->
@@ -50,6 +52,18 @@
         <div id="my-fixture-ticker" class="fixture-ticker">
           <p class="empty-hint">Add your Team ID to config.json to see your own players here.</p>
         </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">All 20 Teams — Fixture Difficulty, easiest to hardest</div>
+        <div class="fdr-key">
+          <span><i style="background:#1F7A4D"></i>Easiest</span>
+          <span><i style="background:#34B871"></i></span>
+          <span><i style="background:#5B6B62"></i></span>
+          <span><i style="background:#C1443C"></i></span>
+          <span><i style="background:#8A2C26"></i>Hardest</span>
+        </div>
+        <div id="team-fixture-ticker" class="fixture-ticker"></div>
       </section>
     </section>
 
@@ -141,6 +155,58 @@
         <div id="league-content">
           <p class="empty-hint">Configure mini_league_id in config.json to track a league.</p>
         </div>
+      </section>
+    </section>
+
+    <!-- ATTACKING/DEFENDING TAB -->
+    <section id="tab-stats" class="tab-panel" hidden>
+      <section class="card">
+        <div class="card-title">What's here (and what isn't)</div>
+        <p class="rec-explainer">
+          Everything below is a real field from the official FPL API — tackles, clearances/blocks/
+          interceptions, recoveries, BPS, and Influence/Creativity/Threat as separate numbers rather
+          than the combined ICT index. Set-piece order (corners, direct free-kicks, penalties) is
+          included where a club has confirmed a taker. Shots taken, headers won, "chances created,"
+          and "big chances created" are NOT included — FPL's free API doesn't expose those, they're
+          Opta-licensed data. Nothing here is relabelled to look like something it isn't.
+        </p>
+      </section>
+      <section class="card">
+        <div class="filters">
+          <input id="stats-search" type="text" placeholder="Search player…" />
+          <select id="stats-pos-filter">
+            <option value="">All positions</option>
+            <option value="GKP">GKP</option>
+            <option value="DEF">DEF</option>
+            <option value="MID">MID</option>
+            <option value="FWD">FWD</option>
+          </select>
+          <select id="stats-team-filter"><option value="">All teams</option></select>
+        </div>
+        <div class="table-wrap">
+          <table id="stats-table">
+            <thead><tr id="stats-table-head"></tr></thead>
+            <tbody id="stats-rows"></tbody>
+          </table>
+        </div>
+        <div id="stats-row-count" class="row-count"></div>
+      </section>
+    </section>
+
+    <!-- PRICE CHANGES TAB -->
+    <section id="tab-prices" class="tab-panel" hidden>
+      <section class="card">
+        <div class="card-title">How this works</div>
+        <p class="rec-explainer">
+          Straight from FPL's own price-tracking fields: today's movers (since the last daily price
+          check) and movers since the season started. Not included: FPL's newer projection-style
+          fields hinting at upcoming changes — I couldn't confirm their exact meaning from documentation,
+          so rather than guess, this only shows changes that have already happened.
+        </p>
+      </section>
+      <div id="prices-tabs" class="recs-tabs"></div>
+      <section class="card">
+        <div id="prices-content"></div>
       </section>
     </section>
 

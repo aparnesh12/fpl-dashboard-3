@@ -6,6 +6,8 @@ const state = {
   teamRating: null,
   chipSquads: null,
   miniLeague: null,
+  teamFixtureScores: [],
+  priceChanges: null,
   meta: {},
   sortKey: 'pred_next5',
   sortDir: 'desc',
@@ -13,12 +15,41 @@ const state = {
   posFilter: '',
   teamFilter: '',
   statusFilter: '',
+  statsSortKey: 'def_con_p90',
+  statsSortDir: 'desc',
+  statsSearch: '',
+  statsPosFilter: '',
+  statsTeamFilter: '',
 };
 
 const DIFFICULTY_COLORS = { 1: '#1F7A4D', 2: '#34B871', 3: '#5B6B62', 4: '#C1443C', 5: '#8A2C26' };
 const NUMERIC_KEYS = new Set(['price', 'selected_by', 'form', 'total_points', 'ppm', 'ict_index', 'xgi', 'def_con_p90', 'pred_next', 'pred_next5']);
+const STATS_NUMERIC_KEYS = new Set(['tackles', 'cbi', 'recoveries', 'def_con_p90', 'influence', 'creativity', 'threat', 'xg', 'xa', 'xg_p90', 'xa_p90']);
 const STATUS_SHORT = { d: 'DOUBT', i: 'INJ', s: 'SUSP', u: 'N/A', n: 'N/A' };
 const REC_POSITIONS = ['GKP', 'DEF', 'MID', 'FWD'];
+
+const STATS_COLUMNS = [
+  { key: 'name', label: 'Player' },
+  { key: 'team', label: 'Team' },
+  { key: 'pos', label: 'Pos' },
+  { key: 'tackles', label: 'Tackles', tip: 'Tackles made this season.' },
+  { key: 'cbi', label: 'CBI', tip: 'Clearances, blocks and interceptions, combined.' },
+  { key: 'recoveries', label: 'Recov.', tip: 'Ball recoveries.' },
+  { key: 'def_con_p90', label: 'DC/90', tip: 'Defensive Contribution per 90 minutes — the FPL-scoring combination of tackles, CBI and recoveries.' },
+  { key: 'influence', label: 'Infl.', tip: 'FPL\u2019s Influence score \u2014 match-dominance actions. Reads "\u2014" during a live gameweek until FPL finalizes it.' },
+  { key: 'creativity', label: 'Creat.', tip: 'FPL\u2019s Creativity score \u2014 chance creation and passing threat. Reads "\u2014" until finalized.' },
+  { key: 'threat', label: 'Threat', tip: 'FPL\u2019s Threat score \u2014 goalscoring threat. Reads "\u2014" until finalized.' },
+  { key: 'xg', label: 'xG', tip: 'Expected goals this season.' },
+  { key: 'xa', label: 'xA', tip: 'Expected assists this season.' },
+  { key: 'xg_p90', label: 'xG/90', tip: 'Expected goals per 90 minutes played.' },
+  { key: 'xa_p90', label: 'xA/90', tip: 'Expected assists per 90 minutes played.' },
+  { key: 'setpieces', label: 'Set Pieces', tip: 'Confirmed penalty, direct free-kick, and corner order for their club, where one exists.' },
+];
+
+const PRICE_TABS = [
+  ['today_risers', "Today's Risers"], ['today_fallers', "Today's Fallers"],
+  ['season_risers', 'Season Risers'], ['season_fallers', 'Season Fallers'],
+];
 
 const COLUMNS = [
   { key: 'name', label: 'Player' },
@@ -120,7 +151,7 @@ window.addEventListener('resize', () => { if (activeTipAnchor) positionTooltip(a
 
 async function init() {
   try {
-    const [players, teams, fixtures, recommendations, teamRating, chipSquads, miniLeague, meta] = await Promise.all([
+    const [players, teams, fixtures, recommendations, teamRating, chipSquads, miniLeague, teamFixtureScores, priceChanges, meta] = await Promise.all([
       loadJSON('data/players.json'),
       loadJSON('data/teams.json'),
       loadJSON('data/fixtures.json'),
@@ -128,6 +159,8 @@ async function init() {
       loadJSON('data/team_rating.json').catch(() => null),
       loadJSON('data/chip_squads.json').catch(() => null),
       loadJSON('data/mini_league.json').catch(() => null),
+      loadJSON('data/team_fixture_scores.json').catch(() => []),
+      loadJSON('data/price_changes.json').catch(() => null),
       loadJSON('data/meta.json'),
     ]);
     state.players = players;
@@ -137,11 +170,14 @@ async function init() {
     state.teamRating = teamRating;
     state.chipSquads = chipSquads;
     state.miniLeague = miniLeague;
+    state.teamFixtureScores = teamFixtureScores;
+    state.priceChanges = priceChanges;
     state.meta = meta;
 
     renderMeta();
     renderTeamFilter();
     renderMyFixtureTicker();
+    renderTeamFixtureTicker();
     renderSquad();
     renderTableHead();
     renderTable();
@@ -151,6 +187,11 @@ async function init() {
     renderChipsTabs();
     renderChipsContent();
     renderMiniLeague();
+    renderStatsTableHead();
+    renderStatsTable();
+    renderStatsTeamFilter();
+    renderPricesTabs();
+    renderPricesContent();
   } catch (err) {
     document.getElementById('gw-badge').textContent = 'Data unavailable';
     console.error(err);
@@ -598,6 +639,205 @@ function renderMiniLeague() {
   });
   html += '</tbody></table></div>';
   wrap.innerHTML = html;
+}
+
+/* ---------- All 20 teams' fixture difficulty (Overview) ---------- */
+function renderTeamFixtureTicker() {
+  const wrap = document.getElementById('team-fixture-ticker');
+  const scores = state.teamFixtureScores || [];
+  wrap.innerHTML = '';
+  scores.forEach((t) => {
+    const row = document.createElement('div');
+    row.className = 'ticker-row';
+
+    const label = document.createElement('div');
+    label.className = 'ticker-team';
+    label.textContent = t.team;
+    row.appendChild(label);
+
+    const scoreEl = document.createElement('div');
+    scoreEl.className = 'ticker-score';
+    if (t.score !== null) {
+      scoreEl.style.background = fixtureScoreColor(t.score);
+      scoreEl.textContent = t.score.toFixed(1);
+      scoreEl.setAttribute('data-tip', `Average difficulty across ${t.fixtures.length} upcoming fixture${t.fixtures.length === 1 ? '' : 's'}. Lower is easier.`);
+    } else {
+      scoreEl.style.background = '#5B6B62';
+      scoreEl.textContent = '—';
+    }
+    row.appendChild(scoreEl);
+
+    const cellsWrap = document.createElement('div');
+    cellsWrap.className = 'ticker-cells';
+    if (!t.fixtures.length) {
+      const cell = document.createElement('div');
+      cell.className = 'ticker-cell';
+      cell.style.background = '#5B6B62';
+      cell.textContent = 'BLANK';
+      cellsWrap.appendChild(cell);
+    }
+    t.fixtures.forEach((f) => {
+      const cell = document.createElement('div');
+      cell.className = 'ticker-cell';
+      cell.style.background = DIFFICULTY_COLORS[f.difficulty] || '#5B6B62';
+      cell.textContent = (f.is_home ? '' : '@') + f.opponent;
+      cell.setAttribute('data-tip', `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`);
+      cellsWrap.appendChild(cell);
+    });
+    row.appendChild(cellsWrap);
+    wrap.appendChild(row);
+  });
+}
+
+/* ---------- Attacking/Defending stats tab ---------- */
+function pendingNumCell(val) {
+  if (val === null || val === undefined) {
+    return `<span class="na-cell" data-tip="Not finalized for this gameweek yet — same reason as the ICT column.">—</span>`;
+  }
+  return val.toFixed(1);
+}
+
+function setPiecesHtml(p) {
+  const tags = [];
+  if (p.penalty_order) tags.push(p.penalty_order === 1 ? 'PEN' : `PEN${p.penalty_order}`);
+  if (p.direct_fk_order) tags.push(p.direct_fk_order === 1 ? 'FK' : `FK${p.direct_fk_order}`);
+  if (p.corner_fk_order) tags.push(p.corner_fk_order === 1 ? 'CK' : `CK${p.corner_fk_order}`);
+  return tags.length ? escapeHtml(tags.join(' ')) : '<span class="na-cell">—</span>';
+}
+
+function renderStatsTeamFilter() {
+  const sel = document.getElementById('stats-team-filter');
+  [...state.teams]
+    .sort((a, b) => a.short_name.localeCompare(b.short_name))
+    .forEach((t) => {
+      const opt = document.createElement('option');
+      opt.value = t.short_name;
+      opt.textContent = t.short_name;
+      sel.appendChild(opt);
+    });
+}
+
+function renderStatsTableHead() {
+  const tr = document.getElementById('stats-table-head');
+  tr.innerHTML = '';
+  STATS_COLUMNS.forEach((col) => {
+    const th = document.createElement('th');
+    th.textContent = col.label;
+    th.dataset.key = col.key;
+    if (col.tip) th.dataset.tip = col.tip;
+    th.addEventListener('click', () => {
+      if (col.key === 'setpieces') return; // not a meaningful sort key
+      if (state.statsSortKey === col.key) {
+        state.statsSortDir = state.statsSortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.statsSortKey = col.key;
+        state.statsSortDir = 'desc';
+      }
+      renderStatsTable();
+    });
+    tr.appendChild(th);
+  });
+}
+
+function applyStatsFilters(players) {
+  const q = state.statsSearch.toLowerCase();
+  return players.filter((p) => {
+    if (q && !p.name.toLowerCase().includes(q) && !p.full_name.toLowerCase().includes(q)) return false;
+    if (state.statsPosFilter && p.pos !== state.statsPosFilter) return false;
+    if (state.statsTeamFilter && p.team !== state.statsTeamFilter) return false;
+    return true;
+  });
+}
+
+function renderStatsTable() {
+  document.querySelectorAll('#stats-table-head th').forEach((th) => {
+    th.style.color = th.dataset.key === state.statsSortKey ? 'var(--chalk)' : '';
+  });
+
+  const tbody = document.getElementById('stats-rows');
+  const rows = applyStatsFilters(state.players);
+
+  rows.sort((a, b) => {
+    const dir = state.statsSortDir === 'asc' ? 1 : -1;
+    const av = a[state.statsSortKey];
+    const bv = b[state.statsSortKey];
+    if (STATS_NUMERIC_KEYS.has(state.statsSortKey)) return ((av ?? -1) - (bv ?? -1)) * dir;
+    return String(av ?? '').localeCompare(String(bv ?? '')) * dir;
+  });
+
+  document.getElementById('stats-row-count').textContent = `${rows.length} player${rows.length === 1 ? '' : 's'}`;
+
+  const frag = document.createDocumentFragment();
+  rows.forEach((p) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="name-cell">${escapeHtml(p.name)}</td>
+      <td>${escapeHtml(p.team)}</td>
+      <td>${p.pos}</td>
+      <td>${p.tackles}</td>
+      <td>${p.cbi}</td>
+      <td>${p.recoveries}</td>
+      <td>${p.def_con_p90.toFixed(1)}</td>
+      <td>${pendingNumCell(p.influence)}</td>
+      <td>${pendingNumCell(p.creativity)}</td>
+      <td>${pendingNumCell(p.threat)}</td>
+      <td>${p.xg.toFixed(1)}</td>
+      <td>${p.xa.toFixed(1)}</td>
+      <td>${p.xg_p90.toFixed(2)}</td>
+      <td>${p.xa_p90.toFixed(2)}</td>
+      <td>${setPiecesHtml(p)}</td>
+    `;
+    frag.appendChild(tr);
+  });
+  tbody.innerHTML = '';
+  tbody.appendChild(frag);
+}
+
+document.getElementById('stats-search').addEventListener('input', (e) => { state.statsSearch = e.target.value; renderStatsTable(); });
+document.getElementById('stats-pos-filter').addEventListener('change', (e) => { state.statsPosFilter = e.target.value; renderStatsTable(); });
+document.getElementById('stats-team-filter').addEventListener('change', (e) => { state.statsTeamFilter = e.target.value; renderStatsTable(); });
+
+/* ---------- Price Changes tab ---------- */
+let activePricesTab = 'today_risers';
+
+function renderPricesTabs() {
+  const wrap = document.getElementById('prices-tabs');
+  wrap.innerHTML = '';
+  PRICE_TABS.forEach(([key, label]) => {
+    const btn = document.createElement('button');
+    btn.className = 'recs-pos-btn' + (key === activePricesTab ? ' active' : '');
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      activePricesTab = key;
+      renderPricesTabs();
+      renderPricesContent();
+    });
+    wrap.appendChild(btn);
+  });
+}
+
+function renderPricesContent() {
+  const wrap = document.getElementById('prices-content');
+  const list = (state.priceChanges && state.priceChanges[activePricesTab]) || [];
+  if (!list.length) {
+    wrap.innerHTML = '<p class="empty-hint">No movers in this category right now.</p>';
+    return;
+  }
+  wrap.innerHTML = '';
+  list.forEach((p) => {
+    const positive = p.change > 0;
+    const row = document.createElement('div');
+    row.className = 'rec-row';
+    row.innerHTML = `
+      <div class="rec-rank ${positive ? 'move-up' : 'move-down'}">${positive ? '▲' : '▼'}</div>
+      <div class="rec-name-wrap">
+        <div class="rec-name">${escapeHtml(p.name)}</div>
+        <div class="rec-sub">${escapeHtml(p.team)} · ${p.pos} · £${p.price.toFixed(1)}m · ${p.selected_by.toFixed(1)}% owned</div>
+      </div>
+      <div class="rec-stat"><div class="rec-stat-value ${positive ? 'move-up' : 'move-down'}">${positive ? '+' : ''}£${p.change.toFixed(1)}m</div></div>
+    `;
+    wrap.appendChild(row);
+  });
 }
 
 init();

@@ -197,6 +197,49 @@ def build_fixture_ticker(fixtures, teams_by_id, n_gws=FIXTURE_WINDOW):
     return by_team
 
 
+def build_team_fixture_scores(fixture_ticker, teams_by_id):
+    """Same average-difficulty score used for the per-player ticker, computed
+    per team instead, and pre-sorted easiest to hardest so the frontend
+    doesn't have to."""
+    scored = []
+    for t_id, fixtures_list in fixture_ticker.items():
+        team = teams_by_id.get(t_id, {})
+        avg = round(sum(f["difficulty"] for f in fixtures_list) / len(fixtures_list), 2) if fixtures_list else None
+        scored.append({
+            "team_id": t_id,
+            "team": team.get("short_name", "?"),
+            "team_name": team.get("name", "?"),
+            "score": avg,
+            "fixtures": fixtures_list,
+        })
+    scored.sort(key=lambda t: (t["score"] is None, t["score"]))
+    return scored
+
+
+def build_price_changes(players):
+    """Today's risers/fallers (cost_change_event) and season-long movers
+    (cost_change_start), each pre-sorted by magnitude. Deliberately doesn't
+    use the newer price_change_percent/price_change_projections fields FPL's
+    feed now includes — their exact semantics aren't documented anywhere I
+    could confirm, and presenting a guess as a real projection would be
+    worse than not having it."""
+    def slim(p, change_key):
+        return {"id": p["id"], "name": p["name"], "team": p["team"], "pos": p["pos"],
+                "price": p["price"], "change": p[change_key], "selected_by": p["selected_by"]}
+
+    today_risers = sorted([p for p in players if p["cost_change_event"] > 0], key=lambda p: -p["cost_change_event"])
+    today_fallers = sorted([p for p in players if p["cost_change_event"] < 0], key=lambda p: p["cost_change_event"])
+    season_risers = sorted([p for p in players if p["cost_change_start"] > 0], key=lambda p: -p["cost_change_start"])
+    season_fallers = sorted([p for p in players if p["cost_change_start"] < 0], key=lambda p: p["cost_change_start"])
+
+    return {
+        "today_risers": [slim(p, "cost_change_event") for p in today_risers[:25]],
+        "today_fallers": [slim(p, "cost_change_event") for p in today_fallers[:25]],
+        "season_risers": [slim(p, "cost_change_start") for p in season_risers[:25]],
+        "season_fallers": [slim(p, "cost_change_start") for p in season_fallers[:25]],
+    }
+
+
 def predicted_points(player_form, team_fixtures, games_elapsed, minutes_played, n_gws=PREDICT_WINDOW):
     """Heuristic, transparent projection: recent form (FPL's own recency-
     weighted points/game) scaled by upcoming fixture difficulty and by how
@@ -257,11 +300,26 @@ def build_players(bootstrap, fixtures, teams_by_id, current_gw, ict_pending, his
                 "form": form,
                 "points_per_game": safe_float(el.get("points_per_game")),
                 "ict_index": None if ict_pending else safe_float(el.get("ict_index")),
+                "influence": None if ict_pending else safe_float(el.get("influence")),
+                "creativity": None if ict_pending else safe_float(el.get("creativity")),
+                "threat": None if ict_pending else safe_float(el.get("threat")),
                 "xg": safe_float(el.get("expected_goals")),
                 "xa": safe_float(el.get("expected_assists")),
                 "xgi": safe_float(el.get("expected_goal_involvements")),
+                "xg_p90": safe_float(el.get("expected_goals_per_90")),
+                "xa_p90": safe_float(el.get("expected_assists_per_90")),
                 "def_con": el.get("defensive_contribution", 0),
                 "def_con_p90": safe_float(el.get("defensive_contribution_per_90")),
+                "tackles": el.get("tackles", 0),
+                "cbi": el.get("clearances_blocks_interceptions", 0),
+                "recoveries": el.get("recoveries", 0),
+                "bps": el.get("bps", 0),
+                "starts": el.get("starts", 0),
+                "corner_fk_order": el.get("corners_and_indirect_freekicks_order"),
+                "direct_fk_order": el.get("direct_freekicks_order"),
+                "penalty_order": el.get("penalties_order"),
+                "cost_change_event": round(el.get("cost_change_event", 0) / 10, 1),
+                "cost_change_start": round(el.get("cost_change_start", 0) / 10, 1),
                 "minutes": minutes,
                 "goals": el.get("goals_scored", 0),
                 "assists": el.get("assists", 0),
@@ -532,7 +590,7 @@ def build_mini_league(config, current_gw):
     }
 
 
-
+def build_squad(config, current_gw):
     team_id = config.get("fpl_team_id")
     if not team_id:
         return None
@@ -591,7 +649,9 @@ def main():
     players = build_players(bootstrap, fixtures, teams_by_id, current_gw, ict_pending, history_data)
     players_by_id = {p["id"]: p for p in players}
     fixture_ticker = build_fixture_ticker(fixtures, teams_by_id)
+    team_fixture_scores = build_team_fixture_scores(fixture_ticker, teams_by_id)
     recommendations = build_recommendations(players, teams_by_id, squad_element_ids)
+    price_changes = build_price_changes(players)
 
     print("Rating squad and building chip-optimal lineups...")
     team_rating = build_team_rating(squad, players_by_id, players)
@@ -609,6 +669,12 @@ def main():
 
     with open(os.path.join(DATA_DIR, "fixtures.json"), "w") as f:
         json.dump(fixture_ticker, f)
+
+    with open(os.path.join(DATA_DIR, "team_fixture_scores.json"), "w") as f:
+        json.dump(team_fixture_scores, f)
+
+    with open(os.path.join(DATA_DIR, "price_changes.json"), "w") as f:
+        json.dump(price_changes, f)
 
     with open(os.path.join(DATA_DIR, "recommendations.json"), "w") as f:
         json.dump(recommendations, f)
