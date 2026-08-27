@@ -47,6 +47,7 @@ const STATS_COLUMNS = [
 ];
 
 const PRICE_TABS = [
+  ['predicted_risers', 'Predicted Risers'], ['predicted_fallers', 'Predicted Fallers'],
   ['today_risers', "Today's Risers"], ['today_fallers', "Today's Fallers"],
   ['season_risers', 'Season Risers'], ['season_fallers', 'Season Fallers'],
 ];
@@ -798,7 +799,7 @@ document.getElementById('stats-pos-filter').addEventListener('change', (e) => { 
 document.getElementById('stats-team-filter').addEventListener('change', (e) => { state.statsTeamFilter = e.target.value; renderStatsTable(); });
 
 /* ---------- Price Changes tab ---------- */
-let activePricesTab = 'today_risers';
+let activePricesTab = 'predicted_risers';
 
 function renderPricesTabs() {
   const wrap = document.getElementById('prices-tabs');
@@ -823,19 +824,35 @@ function renderPricesContent() {
     wrap.innerHTML = '<p class="empty-hint">No movers in this category right now.</p>';
     return;
   }
+  const isPredicted = activePricesTab.startsWith('predicted_');
   wrap.innerHTML = '';
   list.forEach((p) => {
-    const positive = p.change > 0;
+    const positive = isPredicted ? p.percent > 0 : p.change > 0;
     const row = document.createElement('div');
     row.className = 'rec-row';
-    row.innerHTML = `
-      <div class="rec-rank ${positive ? 'move-up' : 'move-down'}">${positive ? '▲' : '▼'}</div>
-      <div class="rec-name-wrap">
-        <div class="rec-name">${escapeHtml(p.name)}</div>
-        <div class="rec-sub">${escapeHtml(p.team)} · ${p.pos} · £${p.price.toFixed(1)}m · ${p.selected_by.toFixed(1)}% owned</div>
-      </div>
-      <div class="rec-stat"><div class="rec-stat-value ${positive ? 'move-up' : 'move-down'}">${positive ? '+' : ''}£${p.change.toFixed(1)}m</div></div>
-    `;
+    if (isPredicted) {
+      const tip = `FPL's own Price Change Predictor: ${p.percent.toFixed(0)}% progress toward tonight's threshold, moving at ${p.hourly_rate > 0 ? '+' : ''}${p.hourly_rate}%/hr. A guide, not a guarantee — late transfer activity can still change the outcome.`;
+      row.innerHTML = `
+        <div class="rec-rank ${positive ? 'move-up' : 'move-down'}">${positive ? '▲' : '▼'}</div>
+        <div class="rec-name-wrap">
+          <div class="rec-name">${escapeHtml(p.name)}</div>
+          <div class="rec-sub">${escapeHtml(p.team)} · ${p.pos} · £${p.price.toFixed(1)}m · ${p.selected_by.toFixed(1)}% owned</div>
+        </div>
+        <div class="rec-stat" data-tip="${escapeAttr(tip)}">
+          <div class="rec-stat-value ${positive ? 'move-up' : 'move-down'}">${p.confidence}</div>
+          <div class="rec-stat-label">${p.percent.toFixed(0)}%</div>
+        </div>
+      `;
+    } else {
+      row.innerHTML = `
+        <div class="rec-rank ${positive ? 'move-up' : 'move-down'}">${positive ? '▲' : '▼'}</div>
+        <div class="rec-name-wrap">
+          <div class="rec-name">${escapeHtml(p.name)}</div>
+          <div class="rec-sub">${escapeHtml(p.team)} · ${p.pos} · £${p.price.toFixed(1)}m · ${p.selected_by.toFixed(1)}% owned</div>
+        </div>
+        <div class="rec-stat"><div class="rec-stat-value ${positive ? 'move-up' : 'move-down'}">${positive ? '+' : ''}£${p.change.toFixed(1)}m</div></div>
+      `;
+    }
     wrap.appendChild(row);
   });
 }

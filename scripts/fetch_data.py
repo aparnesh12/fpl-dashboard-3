@@ -216,27 +216,58 @@ def build_team_fixture_scores(fixture_ticker, teams_by_id):
     return scored
 
 
+def price_change_confidence(percent):
+    """Per FPL's own 2026/27 Price Change Predictor and how Fantasy Football
+    Scout documents reading it: the percent is progress toward the next
+    threshold and can run past 100 (or below -100) — official guidance is
+    'very likely' at 100%+, 'likely' from 80%+. Below that it's too soft to
+    act on, so this deliberately returns None rather than a false-confident
+    label."""
+    abs_pct = abs(percent)
+    if abs_pct >= 100:
+        return "Very Likely"
+    if abs_pct >= 80:
+        return "Likely"
+    if abs_pct >= 50:
+        return "Possible"
+    return None
+
+
 def build_price_changes(players):
     """Today's risers/fallers (cost_change_event) and season-long movers
-    (cost_change_start), each pre-sorted by magnitude. Deliberately doesn't
-    use the newer price_change_percent/price_change_projections fields FPL's
-    feed now includes — their exact semantics aren't documented anywhere I
-    could confirm, and presenting a guess as a real projection would be
-    worse than not having it."""
+    (cost_change_start), each pre-sorted by magnitude, plus predicted movers
+    from FPL's own official Price Change Predictor (price_change_percent) —
+    confirmed against FPL's launch announcement and Fantasy Football Scout's
+    documented interpretation of the same fields before being wired up."""
     def slim(p, change_key):
         return {"id": p["id"], "name": p["name"], "team": p["team"], "pos": p["pos"],
                 "price": p["price"], "change": p[change_key], "selected_by": p["selected_by"]}
+
+    def slim_predicted(p):
+        return {"id": p["id"], "name": p["name"], "team": p["team"], "pos": p["pos"],
+                "price": p["price"], "percent": p["price_change_percent"],
+                "hourly_rate": p["price_change_hourly_rate"],
+                "confidence": price_change_confidence(p["price_change_percent"]),
+                "selected_by": p["selected_by"]}
 
     today_risers = sorted([p for p in players if p["cost_change_event"] > 0], key=lambda p: -p["cost_change_event"])
     today_fallers = sorted([p for p in players if p["cost_change_event"] < 0], key=lambda p: p["cost_change_event"])
     season_risers = sorted([p for p in players if p["cost_change_start"] > 0], key=lambda p: -p["cost_change_start"])
     season_fallers = sorted([p for p in players if p["cost_change_start"] < 0], key=lambda p: p["cost_change_start"])
 
+    predicted_pool = [p for p in players if price_change_confidence(p["price_change_percent"])]
+    predicted_risers = sorted([p for p in predicted_pool if p["price_change_percent"] > 0],
+                               key=lambda p: -p["price_change_percent"])
+    predicted_fallers = sorted([p for p in predicted_pool if p["price_change_percent"] < 0],
+                                key=lambda p: p["price_change_percent"])
+
     return {
         "today_risers": [slim(p, "cost_change_event") for p in today_risers[:25]],
         "today_fallers": [slim(p, "cost_change_event") for p in today_fallers[:25]],
         "season_risers": [slim(p, "cost_change_start") for p in season_risers[:25]],
         "season_fallers": [slim(p, "cost_change_start") for p in season_fallers[:25]],
+        "predicted_risers": [slim_predicted(p) for p in predicted_risers[:25]],
+        "predicted_fallers": [slim_predicted(p) for p in predicted_fallers[:25]],
     }
 
 
@@ -320,6 +351,8 @@ def build_players(bootstrap, fixtures, teams_by_id, current_gw, ict_pending, his
                 "penalty_order": el.get("penalties_order"),
                 "cost_change_event": round(el.get("cost_change_event", 0) / 10, 1),
                 "cost_change_start": round(el.get("cost_change_start", 0) / 10, 1),
+                "price_change_percent": safe_float(el.get("price_change_percent")),
+                "price_change_hourly_rate": el.get("price_change_hourly_rate", 0),
                 "minutes": minutes,
                 "goals": el.get("goals_scored", 0),
                 "assists": el.get("assists", 0),
