@@ -3,9 +3,14 @@ const state = {
   teams: [],
   fixtures: {},
   recommendations: {},
+  differentials: {},
   teamRating: null,
   chipSquads: null,
+  benchBoostPlan: null,
+  tripleCaptainPlan: null,
   miniLeague: null,
+  rivalIntelligence: null,
+  seasonJourney: null,
   teamFixtureScores: [],
   priceChanges: null,
   meta: {},
@@ -27,6 +32,7 @@ const NUMERIC_KEYS = new Set(['price', 'selected_by', 'form', 'total_points', 'p
 const STATS_NUMERIC_KEYS = new Set(['tackles', 'cbi', 'recoveries', 'def_con_p90', 'influence', 'creativity', 'threat', 'xg', 'xa', 'xg_p90', 'xa_p90']);
 const STATUS_SHORT = { d: 'DOUBT', i: 'INJ', s: 'SUSP', u: 'N/A', n: 'N/A' };
 const REC_POSITIONS = ['GKP', 'DEF', 'MID', 'FWD'];
+const PITCH_ROWS = { GKP: 12, DEF: 36, MID: 62, FWD: 86 };
 
 const STATS_COLUMNS = [
   { key: 'name', label: 'Player' },
@@ -52,25 +58,14 @@ const PRICE_TABS = [
   ['season_risers', 'Season Risers'], ['season_fallers', 'Season Fallers'],
 ];
 
-const COLUMNS = [
-  { key: 'name', label: 'Player' },
-  { key: 'team', label: 'Team' },
-  { key: 'pos', label: 'Pos' },
-  { key: 'price', label: 'Price', tip: 'Current market price in £ millions.' },
-  { key: 'selected_by', label: 'Own%', tip: 'Percentage of FPL managers who own this player.' },
-  { key: 'form', label: 'Form', tip: "FPL's average points per match over the last 30 days." },
-  { key: 'total_points', label: 'Pts', tip: 'Total points scored this season.' },
-  { key: 'ppm', label: 'PPM', tip: 'Points per million spent (total points ÷ price). Higher is better value.' },
-  { key: 'ict_index', label: 'ICT', tip: 'Influence + Creativity + Threat index. Reads "—" during a live gameweek until FPL finalizes it, usually a day or so after the last match.' },
-  { key: 'xgi', label: 'xGI', tip: 'Expected Goal Involvements — combined expected goals and expected assists from chance quality.' },
-  { key: 'def_con_p90', label: 'DC/90', tip: 'Defensive Contribution per 90 minutes: tackles, interceptions, clearances and blocks.' },
-  { key: 'pred_next', label: 'Next', tip: 'Predicted points for the next gameweek: form × fixture-difficulty multiplier × minutes-reliability factor, plus a small history adjustment if they\u2019ve faced this opponent before (hover the number itself when present).' },
-  { key: 'pred_next5', label: 'Next 5', tip: 'Predicted total points summed over the next 5 gameweeks, same formula per fixture.' },
-  { key: 'status', label: 'Status', tip: 'Injury or availability flag. Tap or hover a flagged player to see details.' },
+const CHIP_TAB_DEFS = [
+  ['wildcard', 'Wildcard'], ['free_hit', 'Free Hit'], ['bench_boost', 'Bench Boost'], ['triple_captain', 'Triple Captain'],
 ];
 
 let activeRecPos = 'MID';
+let recsMode = 'overall';
 let activeChipTab = 'wildcard';
+let activePricesTab = 'predicted_risers';
 
 async function loadJSON(path) {
   const res = await fetch(path + '?t=' + Date.now());
@@ -84,21 +79,11 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// Text-node escaping (above) doesn't need to touch quote characters, but an
-// attribute value does — a literal " in API-sourced text would otherwise
-// close the attribute early. Belt-and-braces for data-tip specifically.
 function escapeAttr(str) {
   return escapeHtml(str).replace(/"/g, '&quot;');
 }
 
-/* ---------- Floating tooltip layer ----------
-   Deliberately NOT a ::after on the element itself. Headers and status
-   badges live inside .table-wrap, which has overflow-x/y:auto for the
-   horizontal-scrolling table — any ::after tooltip on a descendant gets
-   clipped the instant it would extend past the currently-scrolled-into-
-   view area, which is exactly the "have to scroll right to read it"
-   problem. A single fixed-position layer outside that scroll container,
-   repositioned via getBoundingClientRect, has no such ceiling. */
+/* ---------- Floating tooltip layer ---------- */
 const tooltipLayer = document.createElement('div');
 tooltipLayer.className = 'tooltip-layer';
 document.body.appendChild(tooltipLayer);
@@ -152,42 +137,48 @@ window.addEventListener('resize', () => { if (activeTipAnchor) positionTooltip(a
 
 async function init() {
   try {
-    const [players, teams, fixtures, recommendations, teamRating, chipSquads, miniLeague, teamFixtureScores, priceChanges, meta] = await Promise.all([
+    const [players, teams, fixtures, recommendations, differentials, teamRating, chipSquads,
+           benchBoostPlan, tripleCaptainPlan, miniLeague, rivalIntelligence, seasonJourney,
+           teamFixtureScores, priceChanges, meta] = await Promise.all([
       loadJSON('data/players.json'),
       loadJSON('data/teams.json'),
       loadJSON('data/fixtures.json'),
       loadJSON('data/recommendations.json'),
+      loadJSON('data/differentials.json').catch(() => ({})),
       loadJSON('data/team_rating.json').catch(() => null),
       loadJSON('data/chip_squads.json').catch(() => null),
+      loadJSON('data/bench_boost_plan.json').catch(() => null),
+      loadJSON('data/triple_captain_plan.json').catch(() => null),
       loadJSON('data/mini_league.json').catch(() => null),
+      loadJSON('data/rival_intelligence.json').catch(() => null),
+      loadJSON('data/season_journey.json').catch(() => null),
       loadJSON('data/team_fixture_scores.json').catch(() => []),
       loadJSON('data/price_changes.json').catch(() => null),
       loadJSON('data/meta.json'),
     ]);
-    state.players = players;
-    state.teams = teams;
-    state.fixtures = fixtures;
-    state.recommendations = recommendations;
-    state.teamRating = teamRating;
-    state.chipSquads = chipSquads;
-    state.miniLeague = miniLeague;
-    state.teamFixtureScores = teamFixtureScores;
-    state.priceChanges = priceChanges;
-    state.meta = meta;
+    Object.assign(state, {
+      players, teams, fixtures, recommendations, differentials, teamRating, chipSquads,
+      benchBoostPlan, tripleCaptainPlan, miniLeague, rivalIntelligence, seasonJourney,
+      teamFixtureScores, priceChanges, meta,
+    });
 
     renderMeta();
+    renderTodaySummary();
     renderTeamFilter();
     renderMyFixtureTicker();
-    renderTeamFixtureTicker();
+    renderTeamFixtureHeatmap();
     renderSquad();
     renderTableHead();
     renderTable();
+    renderRecsModeTabs();
     renderRecsTabs();
     renderRecsList();
     renderMyTeam();
     renderChipsTabs();
     renderChipsContent();
     renderMiniLeague();
+    renderRivalIntelligence();
+    renderSeasonJourney();
     renderStatsTableHead();
     renderStatsTable();
     renderStatsTeamFilter();
@@ -207,6 +198,57 @@ function renderMeta() {
   } else {
     updated.textContent = 'Not yet synced — run the Action once (see README)';
   }
+}
+
+/* ---------- Today summary ---------- */
+function renderTodaySummary() {
+  const el = document.getElementById('today-bar');
+  const chips = [];
+
+  if (state.meta.gw_deadline) {
+    const deadline = new Date(state.meta.gw_deadline);
+    const diffMs = deadline - new Date();
+    let text, cls = '';
+    if (diffMs <= 0) {
+      text = 'Passed';
+    } else {
+      const days = Math.floor(diffMs / 86400000);
+      const hours = Math.floor((diffMs % 86400000) / 3600000);
+      text = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+      if (diffMs < 86400000) cls = 'alert';
+    }
+    chips.push({ label: `GW${state.meta.current_gw || '?'} Deadline`, value: text, cls });
+  }
+
+  const squad = state.meta.squad;
+  if (squad && squad.picks && squad.picks.length) {
+    const byId = {};
+    state.players.forEach((p) => { byId[p.id] = p; });
+    const squadPlayers = squad.picks.map((pk) => byId[pk.element]).filter(Boolean);
+    const flagged = squadPlayers.filter((p) => p.status !== 'a').length;
+    chips.push({ label: 'Flagged Players', value: flagged, cls: flagged > 0 ? 'alert' : 'ok' });
+
+    if (state.priceChanges) {
+      const myIds = new Set(squadPlayers.map((p) => p.id));
+      let moving = 0;
+      ['predicted_risers', 'predicted_fallers'].forEach((key) => {
+        (state.priceChanges[key] || []).forEach((p) => { if (myIds.has(p.id)) moving++; });
+      });
+      chips.push({ label: 'Predicted to Move Tonight', value: moving, cls: moving > 0 ? 'alert' : '' });
+    }
+  }
+
+  if (state.miniLeague && state.meta.my_entry_id) {
+    const mine = state.miniLeague.standings.find((s) => s.entry === state.meta.my_entry_id);
+    if (mine) chips.push({ label: 'League Rank', value: `#${mine.rank}`, cls: '' });
+  }
+
+  el.innerHTML = chips.map((c) => `
+    <div class="today-chip ${c.cls}">
+      <div class="today-chip-label">${escapeHtml(c.label)}</div>
+      <div class="today-chip-value">${escapeHtml(c.value)}</div>
+    </div>
+  `).join('');
 }
 
 function renderTeamFilter() {
@@ -232,7 +274,38 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
   });
 });
 
-/* ---------- Squad ---------- */
+/* ---------- Pitch view (shared: My Squad + Chip Squad wildcard/free hit) ---------- */
+function renderPitchView(containerId, starters, bench) {
+  const el = document.getElementById(containerId);
+  let html = '<div class="pitch">';
+  Object.keys(PITCH_ROWS).forEach((pos) => {
+    const list = starters[pos] || [];
+    if (!list.length) return;
+    html += `<div class="pitch-row" style="top:${PITCH_ROWS[pos]}%">`;
+    list.forEach((p) => {
+      const capTag = p.isCaptain ? '<span class="pitch-chip-cap">C</span>' : (p.isVice ? '<span class="pitch-chip-cap" style="color:var(--chalk-dim)">V</span>' : '');
+      html += `<div class="pitch-chip${p.isCaptain ? ' captain' : ''}">
+        <div class="pitch-chip-name">${escapeHtml(p.name)}${capTag}</div>
+        ${p.sub ? `<div class="pitch-chip-sub">${escapeHtml(p.sub)}</div>` : ''}
+      </div>`;
+    });
+    html += '</div>';
+  });
+  html += '</div>';
+  if (bench && bench.length) {
+    html += '<div class="pitch-bench-strip"><div class="pitch-bench-label">Bench</div>';
+    bench.forEach((p) => {
+      html += `<div class="pitch-chip bench-row">
+        <div class="pitch-chip-name">${escapeHtml(p.name)}</div>
+        ${p.sub ? `<div class="pitch-chip-sub">${escapeHtml(p.sub)}</div>` : ''}
+      </div>`;
+    });
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+/* ---------- Squad (Overview) ---------- */
 function renderSquad() {
   const squad = state.meta.squad;
   const section = document.getElementById('squad-section');
@@ -246,23 +319,19 @@ function renderSquad() {
   const byId = {};
   state.players.forEach((p) => { byId[p.id] = p; });
 
-  const list = document.getElementById('squad-list');
-  list.innerHTML = '';
-  [...squad.picks]
-    .sort((a, b) => a.position - b.position)
-    .forEach((pick) => {
-      const p = byId[pick.element];
-      if (!p) return;
-      const chip = document.createElement('div');
-      chip.className = 'squad-chip' + (pick.multiplier === 0 ? ' bench' : '');
-      chip.innerHTML = escapeHtml(p.name)
-        + (pick.is_captain ? ' <span class="cap-tag" title="Captain">C</span>' : '')
-        + (pick.is_vice_captain ? ' <span class="vc-tag" title="Vice-captain">V</span>' : '');
-      list.appendChild(chip);
-    });
+  const starters = { GKP: [], DEF: [], MID: [], FWD: [] };
+  const bench = [];
+  [...squad.picks].sort((a, b) => a.position - b.position).forEach((pick) => {
+    const p = byId[pick.element];
+    if (!p) return;
+    const entry = { name: p.name, isCaptain: pick.is_captain, isVice: pick.is_vice_captain, sub: p.pos };
+    if (pick.multiplier === 0) bench.push(entry);
+    else starters[p.pos].push(entry);
+  });
+  renderPitchView('squad-pitch', starters, bench);
 }
 
-/* ---------- My Players' fixture ticker (Overview tab), with a quantitative score ---------- */
+/* ---------- My Players' fixture ticker (Overview) ---------- */
 function fixtureScoreColor(avg) {
   if (avg <= 1.75) return '#1F7A4D';
   if (avg <= 2.5) return '#34B871';
@@ -331,17 +400,65 @@ function renderMyFixtureTicker() {
     });
 }
 
+/* ---------- All 20 teams' fixture heatmap (Overview), grid-aligned by real GW number ---------- */
+function renderTeamFixtureHeatmap() {
+  const el = document.getElementById('team-fixture-heatmap');
+  const scores = state.teamFixtureScores || [];
+  if (!scores.length) {
+    el.innerHTML = '<p class="empty-hint">No fixture data yet.</p>';
+    return;
+  }
+  const allGws = new Set();
+  scores.forEach((t) => t.fixtures.forEach((f) => allGws.add(f.gw)));
+  const gwList = [...allGws].sort((a, b) => a - b).slice(0, 6);
+  el.style.gridTemplateColumns = `46px repeat(${gwList.length || 1}, 1fr)`;
+
+  let html = '<div></div>';
+  gwList.forEach((gw) => { html += `<div class="heatmap-gw-label">GW${gw}</div>`; });
+
+  scores.forEach((t) => {
+    const scoreLabel = t.score !== null ? t.score.toFixed(1) : 'n/a';
+    html += `<div class="heatmap-team-label" data-tip="Fixture score ${scoreLabel} across ${t.fixtures.length} upcoming games — lower is easier">${escapeHtml(t.team)}</div>`;
+    const byGw = {};
+    t.fixtures.forEach((f) => { byGw[f.gw] = f; });
+    gwList.forEach((gw) => {
+      const f = byGw[gw];
+      if (f) {
+        const tip = `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`;
+        html += `<div class="heatmap-cell" style="background:${DIFFICULTY_COLORS[f.difficulty] || '#5B6B62'}" data-tip="${escapeAttr(tip)}">${f.is_home ? '' : '@'}${escapeHtml(f.opponent)}</div>`;
+      } else {
+        html += `<div class="heatmap-cell" style="background:rgba(91,107,98,0.2); color:var(--chalk-dim);">–</div>`;
+      }
+    });
+  });
+  el.innerHTML = html;
+}
+
 /* ---------- All Players table ---------- */
 function renderTableHead() {
   const tr = document.getElementById('player-table-head');
   tr.innerHTML = '';
+  const COLUMNS = [
+    { key: 'name', label: 'Player' },
+    { key: 'team', label: 'Team' },
+    { key: 'pos', label: 'Pos' },
+    { key: 'price', label: 'Price', tip: 'Current market price in £ millions.' },
+    { key: 'selected_by', label: 'Own%', tip: 'Percentage of FPL managers who own this player.' },
+    { key: 'form', label: 'Form', tip: "FPL's average points per match over the last 30 days." },
+    { key: 'total_points', label: 'Pts', tip: 'Total points scored this season.' },
+    { key: 'ppm', label: 'PPM', tip: 'Points per million spent (total points ÷ price). Higher is better value.' },
+    { key: 'ict_index', label: 'ICT', tip: 'Influence + Creativity + Threat index. Reads "—" during a live gameweek until FPL finalizes it, usually a day or so after the last match.' },
+    { key: 'xgi', label: 'xGI', tip: 'Expected Goal Involvements — combined expected goals and expected assists from chance quality.' },
+    { key: 'def_con_p90', label: 'DC/90', tip: 'Defensive Contribution per 90 minutes: tackles, interceptions, clearances and blocks.' },
+    { key: 'pred_next', label: 'Next', tip: 'Predicted points for the next gameweek: form × fixture-difficulty multiplier × minutes-reliability factor, plus a small history adjustment if they\u2019ve faced this opponent before (hover the number itself when present).' },
+    { key: 'pred_next5', label: 'Next 5', tip: 'Predicted total points summed over the next 5 gameweeks, same formula per fixture.' },
+    { key: 'status', label: 'Status', tip: 'Injury or availability flag. Tap or hover a flagged player to see details.' },
+  ];
   COLUMNS.forEach((col) => {
     const th = document.createElement('th');
     th.textContent = col.label;
     th.dataset.key = col.key;
-    if (col.tip) {
-      th.dataset.tip = col.tip;
-    }
+    if (col.tip) th.dataset.tip = col.tip;
     th.addEventListener('click', () => {
       if (state.sortKey === col.key) {
         state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
@@ -445,7 +562,19 @@ document.getElementById('pos-filter').addEventListener('change', (e) => { state.
 document.getElementById('team-filter').addEventListener('change', (e) => { state.teamFilter = e.target.value; renderTable(); });
 document.getElementById('status-filter').addEventListener('change', (e) => { state.statusFilter = e.target.value; renderTable(); });
 
-/* ---------- Recommendations ---------- */
+/* ---------- Recommendations (+ Differentials mode) ---------- */
+function renderRecsModeTabs() {
+  const wrap = document.getElementById('recs-mode-tabs');
+  wrap.innerHTML = '';
+  [['overall', 'Best Overall'], ['differential', 'Differentials']].forEach(([key, label]) => {
+    const btn = document.createElement('button');
+    btn.className = 'recs-pos-btn' + (key === recsMode ? ' active' : '');
+    btn.textContent = label;
+    btn.addEventListener('click', () => { recsMode = key; renderRecsModeTabs(); renderRecsList(); });
+    wrap.appendChild(btn);
+  });
+}
+
 function renderRecsTabs() {
   const wrap = document.getElementById('recs-tabs');
   wrap.innerHTML = '';
@@ -464,9 +593,10 @@ function renderRecsTabs() {
 
 function renderRecsList() {
   const wrap = document.getElementById('recs-list');
-  const list = state.recommendations[activeRecPos] || [];
+  const source = recsMode === 'differential' ? (state.differentials || {}) : (state.recommendations || {});
+  const list = source[activeRecPos] || [];
   if (!list.length) {
-    wrap.innerHTML = '<p class="empty-hint">No data yet — run the Action to populate this.</p>';
+    wrap.innerHTML = `<p class="empty-hint">${recsMode === 'differential' ? 'No low-ownership options meeting the threshold right now.' : 'No data yet — run the Action to populate this.'}</p>`;
     return;
   }
   wrap.innerHTML = '';
@@ -477,11 +607,12 @@ function renderRecsList() {
     const histLine = h
       ? `<div class="rec-sub rec-hist">vs ${escapeHtml(h.opponent)} before: ${h.matches} apps, avg ${h.avg_points}pts (best ${h.best_points})</div>`
       : '';
+    const ownSub = recsMode === 'differential' ? ` · ${p.selected_by.toFixed(1)}% owned` : '';
     row.innerHTML = `
       <div class="rec-rank">${idx + 1}</div>
       <div class="rec-name-wrap">
         <div class="rec-name">${escapeHtml(p.name)}${p.owned ? '<span class="rec-owned-tag">SQUAD</span>' : ''}</div>
-        <div class="rec-sub">${escapeHtml(p.team)} · £${p.price.toFixed(1)}m · PPM ${p.ppm.toFixed(1)}</div>
+        <div class="rec-sub">${escapeHtml(p.team)} · £${p.price.toFixed(1)}m · PPM ${p.ppm.toFixed(1)}${ownSub}</div>
         ${histLine}
       </div>
       <div class="rec-stat"><div class="rec-stat-value">${(p.pred_next ?? 0).toFixed(1)}</div><div class="rec-stat-label">Next</div></div>
@@ -540,11 +671,102 @@ function renderMyTeam() {
   wrap.innerHTML = html;
 }
 
-/* ---------- Chip Squad ---------- */
+/* ---------- Season Journey (hand-rolled SVG line charts, no external library) ---------- */
+function renderLineChart(containerId, points, options = {}) {
+  const el = document.getElementById(containerId);
+  if (!points.length) {
+    el.innerHTML = '<div class="chart-empty">Not enough data yet.</div>';
+    return;
+  }
+  const width = options.width || 600;
+  const height = options.height || 170;
+  const padding = { top: 12, right: 14, bottom: 24, left: 54 };
+  const plotW = width - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
+
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  let yMin = Math.min(...ys);
+  let yMax = Math.max(...ys);
+  if (yMin === yMax) { yMin -= 1; yMax += 1; }
+  const xMin = Math.min(...xs);
+  const xMax = Math.max(...xs);
+
+  const scaleX = (x) => padding.left + (xMax === xMin ? plotW / 2 : (x - xMin) / (xMax - xMin) * plotW);
+  const scaleY = (y) => {
+    const t = (y - yMin) / (yMax - yMin);
+    return options.invertY ? padding.top + t * plotH : padding.top + (1 - t) * plotH;
+  };
+
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${scaleX(p.x).toFixed(1)} ${scaleY(p.y).toFixed(1)}`).join(' ');
+  const baseY = (padding.top + plotH).toFixed(1);
+  const areaD = `${pathD} L ${scaleX(xs[xs.length - 1]).toFixed(1)} ${baseY} L ${scaleX(xs[0]).toFixed(1)} ${baseY} Z`;
+  const color = options.color || '#34B871';
+
+  const dots = points.map((p) => {
+    const label = p.label || (options.yFormat ? options.yFormat(p.y) : String(p.y));
+    return `<circle cx="${scaleX(p.x).toFixed(1)}" cy="${scaleY(p.y).toFixed(1)}" r="3.2" fill="${color}" stroke="#12301F" stroke-width="1.5" data-tip="${escapeAttr(label)}"></circle>`;
+  }).join('');
+
+  const yTicks = [yMin, (yMin + yMax) / 2, yMax];
+  const gridLines = yTicks.map((v) => {
+    const y = scaleY(v).toFixed(1);
+    const label = options.yFormat ? options.yFormat(v) : Math.round(v).toLocaleString();
+    return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="rgba(243,246,241,0.08)" stroke-width="1"></line>
+            <text x="${padding.left - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" fill="#B9C6BE" font-size="10">${label}</text>`;
+  }).join('');
+
+  const labelPoints = points.length <= 6 ? points : [points[0], points[Math.floor(points.length / 2)], points[points.length - 1]];
+  const xLabels = labelPoints.map((p) => `<text x="${scaleX(p.x).toFixed(1)}" y="${height - 6}" text-anchor="middle" fill="#B9C6BE" font-size="10">GW${p.x}</text>`).join('');
+
+  el.innerHTML = `<div class="chart-wrap"><svg viewBox="0 0 ${width} ${height}" style="width:100%; height:auto; display:block;">
+    <path d="${areaD}" fill="${color}" opacity="0.1"></path>
+    <path d="${pathD}" fill="none" stroke="${color}" stroke-width="2.5"></path>
+    ${gridLines}
+    ${dots}
+    ${xLabels}
+  </svg></div>`;
+}
+
+function renderSeasonJourney() {
+  const wrap = document.getElementById('journey-content');
+  const journey = state.seasonJourney;
+  if (!journey || !journey.gameweeks || !journey.gameweeks.length) {
+    wrap.innerHTML = '<p class="empty-hint">Add your Team ID to config.json to see your season charted here.</p>';
+    return;
+  }
+  const gws = journey.gameweeks;
+  let html = '';
+  html += `<section class="card"><div class="card-title">Overall Rank (lower is better)</div><div id="journey-rank-chart"></div></section>`;
+  html += `<section class="card"><div class="card-title">Points per Gameweek</div><div id="journey-points-chart"></div></section>`;
+  html += `<section class="card"><div class="card-title">Squad Value</div><div id="journey-value-chart"></div></section>`;
+  if (journey.chips_used && journey.chips_used.length) {
+    html += `<section class="card"><div class="card-title">Chips Used</div><div class="squad-list">`;
+    journey.chips_used.forEach((c) => {
+      html += `<div class="squad-chip">${escapeHtml(c.name)} <span class="rec-owned-tag">GW${c.event}</span></div>`;
+    });
+    html += `</div></section>`;
+  }
+  wrap.innerHTML = html;
+
+  const rankPoints = gws.filter((g) => g.overall_rank != null).map((g) => ({ x: g.gw, y: g.overall_rank }));
+  renderLineChart('journey-rank-chart', rankPoints, {
+    invertY: true, color: '#34B871',
+    yFormat: (v) => (v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v.toLocaleString()),
+  });
+
+  const ptsPoints = gws.map((g) => ({ x: g.gw, y: g.points, label: `GW${g.gw}: ${g.points} pts${g.chip ? ' · ' + g.chip : ''}` }));
+  renderLineChart('journey-points-chart', ptsPoints, { color: '#E8A33D', yFormat: (v) => Math.round(v) });
+
+  const valuePoints = gws.map((g) => ({ x: g.gw, y: g.value, label: `GW${g.gw}: £${g.value.toFixed(1)}m` }));
+  renderLineChart('journey-value-chart', valuePoints, { color: '#34B871', yFormat: (v) => `£${v.toFixed(1)}m` });
+}
+
+/* ---------- Chip Squad (Wildcard/Free Hit via pitch view, Bench Boost/Triple Captain via lists) ---------- */
 function renderChipsTabs() {
   const wrap = document.getElementById('chips-tabs');
   wrap.innerHTML = '';
-  [['wildcard', 'Wildcard'], ['free_hit', 'Free Hit']].forEach(([key, label]) => {
+  CHIP_TAB_DEFS.forEach(([key, label]) => {
     const btn = document.createElement('button');
     btn.className = 'recs-pos-btn' + (key === activeChipTab ? ' active' : '');
     btn.textContent = label;
@@ -557,45 +779,66 @@ function renderChipsTabs() {
   });
 }
 
-function lineupChipHtml(p, isBench, isCaptain) {
-  return `<div class="lineup-chip${isBench ? ' bench' : ''}${isCaptain ? ' captain' : ''}">
-    <span class="lc-name">${escapeHtml(p.name)}${isCaptain ? ' (C)' : ''}</span>
-    <span class="lc-pts">${(p.pred_next5 ?? 0).toFixed(1)}</span>
-  </div>`;
+function renderBenchBoostContent(wrap) {
+  const plan = state.benchBoostPlan;
+  if (!plan || !plan.by_gameweek || !plan.by_gameweek.length) {
+    wrap.innerHTML = '<p class="empty-hint">Needs your Team ID configured, and a bench to project.</p>';
+    return;
+  }
+  let html = `<div class="chip-summary"><span>Your bench: <b>${plan.bench_players.map((p) => escapeHtml(p.name)).join(', ')}</b></span></div><div class="recs-list">`;
+  plan.by_gameweek.forEach((g, idx) => {
+    html += `<div class="rec-row${idx === 0 ? ' owned' : ''}">
+      <div class="rec-rank">${idx === 0 ? '★' : idx + 1}</div>
+      <div class="rec-name-wrap"><div class="rec-name">GW${g.gw}${idx === 0 ? '<span class="rec-owned-tag">BEST</span>' : ''}</div></div>
+      <div class="rec-stat"><div class="rec-stat-value">${g.projected_bench_points.toFixed(1)}</div><div class="rec-stat-label">Bench Pts</div></div>
+    </div>`;
+  });
+  wrap.innerHTML = html + '</div>';
+}
+
+function renderTripleCaptainContent(wrap) {
+  const plan = state.tripleCaptainPlan;
+  if (!plan || !plan.candidates || !plan.candidates.length) {
+    wrap.innerHTML = '<p class="empty-hint">Needs your Team ID configured to rank your captain options.</p>';
+    return;
+  }
+  let html = '<div class="recs-list">';
+  plan.candidates.forEach((c, idx) => {
+    html += `<div class="rec-row${idx === 0 ? ' owned' : ''}">
+      <div class="rec-rank">${idx === 0 ? '★' : idx + 1}</div>
+      <div class="rec-name-wrap"><div class="rec-name">${escapeHtml(c.name)}${idx === 0 ? '<span class="rec-owned-tag">BEST</span>' : ''}</div><div class="rec-sub">${escapeHtml(c.team)} · best in GW${c.gw}</div></div>
+      <div class="rec-stat"><div class="rec-stat-value">${c.projected_points.toFixed(1)}</div><div class="rec-stat-label">at 3x</div></div>
+    </div>`;
+  });
+  wrap.innerHTML = html + '</div>';
 }
 
 function renderChipsContent() {
   const wrap = document.getElementById('chips-content');
+  if (activeChipTab === 'bench_boost') { renderBenchBoostContent(wrap); return; }
+  if (activeChipTab === 'triple_captain') { renderTripleCaptainContent(wrap); return; }
+
   const data = state.chipSquads && state.chipSquads[activeChipTab];
   if (!data) {
     wrap.innerHTML = '<p class="empty-hint">Needs your Team ID configured (for the budget) and the Action to have run with the optimizer.</p>';
     return;
   }
-  const byPos = { GKP: [], DEF: [], MID: [], FWD: [] };
-  data.starting_xi.forEach((p) => byPos[p.pos].push(p));
+  const starters = { GKP: [], DEF: [], MID: [], FWD: [] };
+  data.starting_xi.forEach((p) => {
+    starters[p.pos].push({ name: p.name, isCaptain: p.id === data.captain.id, sub: `£${p.price.toFixed(1)}m` });
+  });
+  const bench = data.bench.map((p) => ({ name: p.name, sub: `£${p.price.toFixed(1)}m` }));
 
-  let html = `<div class="chip-summary">
+  wrap.innerHTML = `<div class="chip-summary">
     <span>Formation: <b>${escapeHtml(data.formation)}</b></span>
     <span>Budget: <b>£${data.budget_used.toFixed(1)}m</b> / £${data.budget_available.toFixed(1)}m</span>
     <span>Projected: <b>${data.projected_points.toFixed(1)} pts</b></span>
     <span>Captain: <b>${escapeHtml(data.captain.name)}</b></span>
-  </div>`;
-
-  ['GKP', 'DEF', 'MID', 'FWD'].forEach((pos) => {
-    if (!byPos[pos].length) return;
-    html += `<div class="lineup-pos-group"><div class="lineup-pos-label">${pos}</div><div class="lineup-players">`;
-    html += byPos[pos].map((p) => lineupChipHtml(p, false, p.id === data.captain.id)).join('');
-    html += `</div></div>`;
-  });
-
-  html += `<div class="lineup-pos-group"><div class="lineup-pos-label">Bench</div><div class="lineup-players">`;
-  html += data.bench.map((p) => lineupChipHtml(p, true, false)).join('');
-  html += `</div></div>`;
-
-  wrap.innerHTML = html;
+  </div><div id="chips-pitch"></div>`;
+  renderPitchView('chips-pitch', starters, bench);
 }
 
-/* ---------- Mini League ---------- */
+/* ---------- Mini League + Rival Intelligence ---------- */
 function renderMiniLeague() {
   const titleEl = document.getElementById('league-title');
   const wrap = document.getElementById('league-content');
@@ -642,52 +885,27 @@ function renderMiniLeague() {
   wrap.innerHTML = html;
 }
 
-/* ---------- All 20 teams' fixture difficulty (Overview) ---------- */
-function renderTeamFixtureTicker() {
-  const wrap = document.getElementById('team-fixture-ticker');
-  const scores = state.teamFixtureScores || [];
-  wrap.innerHTML = '';
-  scores.forEach((t) => {
-    const row = document.createElement('div');
-    row.className = 'ticker-row';
-
-    const label = document.createElement('div');
-    label.className = 'ticker-team';
-    label.textContent = t.team;
-    row.appendChild(label);
-
-    const scoreEl = document.createElement('div');
-    scoreEl.className = 'ticker-score';
-    if (t.score !== null) {
-      scoreEl.style.background = fixtureScoreColor(t.score);
-      scoreEl.textContent = t.score.toFixed(1);
-      scoreEl.setAttribute('data-tip', `Average difficulty across ${t.fixtures.length} upcoming fixture${t.fixtures.length === 1 ? '' : 's'}. Lower is easier.`);
-    } else {
-      scoreEl.style.background = '#5B6B62';
-      scoreEl.textContent = '—';
-    }
-    row.appendChild(scoreEl);
-
-    const cellsWrap = document.createElement('div');
-    cellsWrap.className = 'ticker-cells';
-    if (!t.fixtures.length) {
-      const cell = document.createElement('div');
-      cell.className = 'ticker-cell';
-      cell.style.background = '#5B6B62';
-      cell.textContent = 'BLANK';
-      cellsWrap.appendChild(cell);
-    }
-    t.fixtures.forEach((f) => {
-      const cell = document.createElement('div');
-      cell.className = 'ticker-cell';
-      cell.style.background = DIFFICULTY_COLORS[f.difficulty] || '#5B6B62';
-      cell.textContent = (f.is_home ? '' : '@') + f.opponent;
-      cell.setAttribute('data-tip', `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`);
-      cellsWrap.appendChild(cell);
-    });
-    row.appendChild(cellsWrap);
-    wrap.appendChild(row);
+function renderRivalIntelligence() {
+  const wrap = document.getElementById('rival-content');
+  const intel = state.rivalIntelligence;
+  if (!intel || !intel.rivals || !intel.rivals.length) {
+    wrap.innerHTML = '<p class="empty-hint">Populates once this gameweek\u2019s deadline has passed for the league.</p>';
+    return;
+  }
+  let html = `<div class="card-title">GW${intel.gw} Captain Choices</div><div class="squad-list" style="margin-bottom:16px;">`;
+  intel.captain_distribution.forEach((c) => {
+    html += `<div class="squad-chip">${escapeHtml(c.name)} <span class="rec-owned-tag">${c.count}</span></div>`;
   });
+  html += `</div>`;
+
+  if (intel.chips_played.length) {
+    html += `<div class="card-title">Chips Played This Gameweek</div><div class="squad-list">`;
+    intel.chips_played.forEach((c) => {
+      html += `<div class="squad-chip bench">${escapeHtml(c.entry_name)}: ${escapeHtml(c.chip)}</div>`;
+    });
+    html += `</div>`;
+  }
+  wrap.innerHTML = html;
 }
 
 /* ---------- Attacking/Defending stats tab ---------- */
@@ -727,7 +945,7 @@ function renderStatsTableHead() {
     th.dataset.key = col.key;
     if (col.tip) th.dataset.tip = col.tip;
     th.addEventListener('click', () => {
-      if (col.key === 'setpieces') return; // not a meaningful sort key
+      if (col.key === 'setpieces') return;
       if (state.statsSortKey === col.key) {
         state.statsSortDir = state.statsSortDir === 'asc' ? 'desc' : 'asc';
       } else {
@@ -798,9 +1016,7 @@ document.getElementById('stats-search').addEventListener('input', (e) => { state
 document.getElementById('stats-pos-filter').addEventListener('change', (e) => { state.statsPosFilter = e.target.value; renderStatsTable(); });
 document.getElementById('stats-team-filter').addEventListener('change', (e) => { state.statsTeamFilter = e.target.value; renderStatsTable(); });
 
-/* ---------- Price Changes tab ---------- */
-let activePricesTab = 'predicted_risers';
-
+/* ---------- Price Changes ---------- */
 function renderPricesTabs() {
   const wrap = document.getElementById('prices-tabs');
   wrap.innerHTML = '';

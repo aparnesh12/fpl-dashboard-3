@@ -1,62 +1,90 @@
 # Mishra's Thirteen — FPL Dashboard
 
-A live, self-updating Fantasy Premier League stats dashboard. A GitHub Actions
-job pulls the official FPL API on a schedule and writes the results as JSON;
+A live, self-updating Fantasy Premier League dashboard. A GitHub Actions job
+pulls the official FPL API and a couple of well-established public archives
+once a day, computes everything server-side, and writes the results as JSON.
 GitHub Pages serves a static site that reads that JSON. No server, no
-database, no API key.
+database, no API key, no framework — plain HTML/CSS/JS plus one Python
+script.
 
 **Why it's built this way:** browsers can't call `fantasy.premierleague.com`
 directly from a different domain — the API doesn't send the CORS headers
 that would allow it. GitHub Actions runners aren't browsers, so they don't
-hit that wall. That's the whole trick: fetch server-side on a timer, publish
-the result as static files, let the page read files instead of calling the
-API itself.
+hit that wall. Fetch server-side on a timer, publish the result as static
+files, let the page read files instead of calling the API itself.
 
 ## What you get
 
-Three tabs:
+Nine tabs, grouped into My Squad / Research / League, plus a summary strip
+above them showing your deadline countdown, any flagged players, anything
+of yours predicted to move price tonight, and your live mini-league rank.
 
-- **Overview** — your squad, and a fixture-difficulty ticker for *your own
-  players* (not all 20 teams), 6 gameweeks out
-- **All Players** — every player in the game: price, ownership%, form,
-  total points, PPM, ICT, xGI, defensive contribution per 90, and two
-  predicted-points columns (next gameweek, next 5). Sortable (click any
-  header), filterable (search/position/team/status), header tooltips
-  explain every stat, the header row stays visible while you scroll, and
-  flagged players show why (injured/doubtful/suspended, with FPL's own
-  chance-of-playing % where available)
-- **Recommendations** — top players per position, ranked by predicted
-  points over the next 5 gameweeks, with your own squad marked. The
-  ranking includes a history adjustment for players who've faced their
-  next opponent before, pulled from the last two completed seasons'
-  actual results (see "Where the history data comes from" below)
+**My Squad**
+- **Overview** — your squad on an actual pitch view, a fixture-difficulty
+  ticker for your own players (6 gameweeks out), and all 20 clubs' fixture
+  difficulty as a heatmap grid aligned by real gameweek number, sorted
+  easiest first
+- **My Team** — a 0–100 squad rating (scoring strength, value efficiency,
+  availability, captaincy quality), with a specific call-out when your
+  captain isn't your best option
+- **Season Journey** — your full season auto-charted: rank, points per
+  gameweek, and squad value over time, plus a chip-usage log. Pulled in one
+  call from FPL's own history record — nothing to log by hand
+- **Chip Squad** — Wildcard and Free Hit are ILP-optimal 15-man squads
+  (integer linear programming, not a heuristic) built against your real
+  budget. Bench Boost and Triple Captain use your *current* squad instead —
+  those chips don't let you rebuild, so it's about which upcoming gameweek
+  suits the players you already have
 
-Auto-refreshes every 3 hours, no maintenance required. Predicted points are
-a transparent formula (form × fixture difficulty × minutes-reliability,
-plus the history adjustment), documented in the "Next 5" column tooltip
-and in `scripts/fetch_data.py` — not a trained model, so you can see
+**Research**
+- **All Players** — every player: price, ownership%, form, points, PPM,
+  ICT, xGI, defensive contribution/90, and two predicted-points columns.
+  Sortable, filterable, header tooltips on every column, sticky header,
+  flagged players show why
+- **Recommendations** — top players per position by predicted points, with
+  a toggle for **Differentials** (same ranking, filtered under 15%
+  ownership) — the picks that could actually move your mini-league rank
+- **Attacking/Defending** — every genuine underlying-stats field FPL
+  exposes: tackles, clearances/blocks/interceptions, recoveries, BPS,
+  Influence/Creativity/Threat as separate numbers, xG/xA with per-90 rates,
+  confirmed set-piece duty. Shots, headers won, and "chances created" are
+  NOT here — FPL's free API doesn't expose them, that's Opta-licensed data
+- **Price Changes** — FPL's own official Price Change Predictor (new for
+  2026/27): predicted risers/fallers with a confidence label, plus changes
+  that have already happened today and this season
+
+**League**
+- **Mini League** — live standings, rank movement, and week-over-week trend
+  once enough daily snapshots exist, plus **Rival Intelligence**: once a
+  gameweek's deadline passes for the league, captain distribution and chip
+  usage across everyone in it — the same public data your own squad uses,
+  just pointed at your rivals too
+
+Predicted points are a transparent formula (form × fixture difficulty ×
+minutes-reliability, plus a history adjustment), documented in the "Next 5"
+tooltip and in `scripts/fetch_data.py` — not a trained model, so you can see
 exactly why a number is what it is.
 
-## Where the history data comes from
+## Where the extra data comes from
 
-The live FPL API only exposes the *current* season's match-by-match
-detail — there's no "how did this player do against Chelsea last year"
-endpoint. For that, the script pulls from
-[vaastav/Fantasy-Premier-League](https://github.com/vaastav/Fantasy-Premier-League),
-a long-running, publicly maintained archive of gameweek-by-gameweek FPL
-data going back years. It's a separate, best-effort fetch: if that repo is
-ever unreachable or restructures its files, the script logs a warning and
-carries on without the history adjustment rather than failing the whole
-run. Matching between this season's players and the archive is done by
-full name (FPL's internal player ID isn't stable across seasons), so a
-handful of players with unusual name formatting might not match — that's
-a known, minor limitation, not a bug to chase.
+- **Opponent history** (Recommendations, All Players): the live FPL API only
+  covers the *current* season match-by-match. For prior seasons, the script
+  pulls [vaastav/Fantasy-Premier-League](https://github.com/vaastav/Fantasy-Premier-League),
+  a long-running public archive. Best-effort — if it's unreachable, the
+  script logs a warning and carries on without that adjustment.
+- **Rival Intelligence**: uses the exact same public picks endpoint your own
+  squad uses, once per rival in the configured league, capped at 30 rivals.
+  Only works once a gameweek's deadline has passed — same limit as your own
+  team, no way around it, by FPL's own design.
+- **Price predictions**: FPL's own official Price Change Predictor fields,
+  confirmed against FPL's 2026/27 launch announcement and Fantasy Football
+  Scout's documented interpretation before being wired up.
 
 ## One-time setup
 
-1. **Create a GitHub repo.** Public is recommended — public repos get
-   unlimited free Actions minutes and free Pages hosting. Everything this
-   site shows is already public FPL data, so there's no privacy downside.
+1. **Create a GitHub repo.** Public is recommended — unlimited free Actions
+   minutes and free Pages hosting. Everything shown is already public FPL
+   data (see the Mini League privacy note below for the one exception).
 
 2. **Push this code to it.**
    ```bash
@@ -65,45 +93,47 @@ a known, minor limitation, not a bug to chase.
    git branch -M main
    git push -u origin main
    ```
-   (This folder is already a git repo with an initial commit — you're just
-   adding the remote and pushing.)
 
-3. **Give Actions permission to push.** Repo → Settings → Actions → General →
-   under "Workflow permissions," select **Read and write permissions**, then
-   Save. The workflow file already requests this, but some repos default to
-   read-only until you flip this switch — if the scheduled job's commit step
-   ever fails, this is the first thing to check.
+3. **Give Actions permission to push.** Repo → Settings → Actions → General
+   → "Workflow permissions" → **Read and write permissions** → Save.
 
-4. **Turn on Pages.** Repo → Settings → Pages → under "Build and
-   deployment," set Source to **Deploy from a branch**, branch **main**,
-   folder **/ (root)**. Save. Your URL (shown on that same page a few
-   seconds later) will be:
-   `https://<your-username>.github.io/<your-repo>/`
+4. **Turn on Pages.** Repo → Settings → Pages → Source: **Deploy from a
+   branch**, branch **main**, folder **/ (root)**. Your URL appears on that
+   same page: `https://<your-username>.github.io/<your-repo>/`
 
-5. **Run the data fetch once, manually.** Repo → Actions tab → "Update FPL
-   Data" → **Run workflow**. This populates real data immediately instead of
-   waiting for the next scheduled run. Refresh your Pages URL after it
-   finishes (~15 seconds).
+5. **Run the data fetch once, manually.** Actions tab → "Update FPL Data" →
+   **Run workflow**. Give it 45–60 seconds — it does more now than a simple
+   fetch (history archive, league scan, optimizer solve).
 
-6. **(Optional) Highlight your own squad.** Open `config.json`, set
-   `fpl_team_id` to the number from your team URL —
-   `fantasy.premierleague.com/entry/`**`1234567`**`/event/3` — commit, push.
-   The next data refresh will pull your current picks and pin them at the
-   top of the page. No login needed; team entries are public read data.
+6. **Configure `config.json`:**
+   - `fpl_team_id` — the number from your team URL,
+     `fantasy.premierleague.com/entry/`**`1234567`**`/event/3`. Unlocks your
+     squad, My Team, Season Journey, and Chip Squad.
+   - `mini_league_id` — the number from your league's URL,
+     `fantasy.premierleague.com/leagues/`**`1035071`**`/standings/c`.
+     Unlocks Mini League and Rival Intelligence.
+
+   Neither needs a login — both are public read-only identifiers.
+
+## A privacy note on Mini League
+
+That tab shows real names and team names for everyone in your configured
+league, not just you — visible to anyone who finds this site, not just
+people already in the league with you. Worth knowing before you point this
+at a league with people who'd mind. `robots.txt` can keep the site out of
+search results, and the repo can be made private if you want it properly
+access-controlled (private repos need a paid GitHub plan for Pages hosting,
+and have a capped, non-unlimited Actions minutes allowance — usually still
+enough for a once-daily script).
 
 ## Changing the refresh schedule
 
-Edit the `cron` line in `.github/workflows/update-data.yml`. It's currently
-`0 */3 * * *` (every 3 hours). FPL prices update roughly once a day and
-points update during live match windows, so anywhere from hourly to every
-6 hours is reasonable — more frequent just burns more Action minutes for
-little extra freshness.
+Edit the `cron` line in `.github/workflows/update-data.yml` — currently
+`0 3 * * *` (once daily, 3am UTC).
 
 ## Extending it
 
-Everything the API returns is in `data/players.json` after each run —
-`scripts/fetch_data.py` is the only place that talks to FPL, and `app.js` is
-the only place that renders the page. Good next additions: a differential
-finder (low ownership + high form), a template-team view, or per-gameweek
-history charts using the `entry/{id}/history/` endpoint. Ask Claude to add
-any of these directly to this repo.
+`scripts/fetch_data.py` is the only place that talks to any API — every
+`build_*` function there does one job and returns one JSON-serializable
+value written to `data/`. `app.js` is the only place that renders the page.
+Ask Claude to add anything else directly to this repo.

@@ -21,22 +21,34 @@
       </div>
     </header>
 
+    <div id="today-bar" class="today-bar"></div>
+
     <nav class="tabs" role="tablist">
-      <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
-      <button class="tab-btn" data-tab="players" role="tab" aria-selected="false">All Players</button>
-      <button class="tab-btn" data-tab="recs" role="tab" aria-selected="false">Recommendations</button>
-      <button class="tab-btn" data-tab="myteam" role="tab" aria-selected="false">My Team</button>
-      <button class="tab-btn" data-tab="chips" role="tab" aria-selected="false">Chip Squad</button>
-      <button class="tab-btn" data-tab="league" role="tab" aria-selected="false">Mini League</button>
-      <button class="tab-btn" data-tab="stats" role="tab" aria-selected="false">Attacking/Defending</button>
-      <button class="tab-btn" data-tab="prices" role="tab" aria-selected="false">Price Changes</button>
+      <div class="tab-group">
+        <span class="tab-group-label">My Squad</span>
+        <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+        <button class="tab-btn" data-tab="myteam" role="tab" aria-selected="false">My Team</button>
+        <button class="tab-btn" data-tab="journey" role="tab" aria-selected="false">Season Journey</button>
+        <button class="tab-btn" data-tab="chips" role="tab" aria-selected="false">Chip Squad</button>
+      </div>
+      <div class="tab-group">
+        <span class="tab-group-label">Research</span>
+        <button class="tab-btn" data-tab="players" role="tab" aria-selected="false">All Players</button>
+        <button class="tab-btn" data-tab="recs" role="tab" aria-selected="false">Recommendations</button>
+        <button class="tab-btn" data-tab="stats" role="tab" aria-selected="false">Attacking/Defending</button>
+        <button class="tab-btn" data-tab="prices" role="tab" aria-selected="false">Price Changes</button>
+      </div>
+      <div class="tab-group">
+        <span class="tab-group-label">League</span>
+        <button class="tab-btn" data-tab="league" role="tab" aria-selected="false">Mini League</button>
+      </div>
     </nav>
 
     <!-- OVERVIEW TAB -->
     <section id="tab-overview" class="tab-panel">
       <section id="squad-section" class="card" hidden>
         <div class="card-title">My Squad · GW<span id="squad-gw"></span></div>
-        <div id="squad-list" class="squad-list"></div>
+        <div id="squad-pitch"></div>
       </section>
 
       <section class="card">
@@ -55,15 +67,16 @@
       </section>
 
       <section class="card">
-        <div class="card-title">All 20 Teams — Fixture Difficulty, easiest to hardest</div>
+        <div class="card-title">All 20 Teams — Fixture Difficulty Heatmap</div>
         <div class="fdr-key">
           <span><i style="background:#1F7A4D"></i>Easiest</span>
           <span><i style="background:#34B871"></i></span>
           <span><i style="background:#5B6B62"></i></span>
           <span><i style="background:#C1443C"></i></span>
           <span><i style="background:#8A2C26"></i>Hardest</span>
+          <span class="fdr-key-note">Sorted easiest-run first · aligned by actual gameweek, blanks shown as gaps</span>
         </div>
-        <div id="team-fixture-ticker" class="fixture-ticker"></div>
+        <div id="team-fixture-heatmap" class="heatmap-grid"></div>
       </section>
     </section>
 
@@ -107,12 +120,12 @@
           reliability, plus a history adjustment for players who've faced their next opponent before
           (pulled from the last two completed seasons' real results, not a guess). That adjustment
           only kicks in with at least 2 prior meetings, and is capped so it nudges the ranking rather
-          than dominates it. Newly promoted opponents (Coventry, Ipswich, Hull) won't have a history
-          entry yet — there's no top-flight data for them to draw on. Players already in your squad
-          are marked.
+          than dominates it. <b>Differentials</b> is the same ranking filtered to under 15% ownership —
+          the picks that could actually move your mini-league rank, not just who everyone already owns.
         </p>
       </section>
       <section class="card">
+        <div id="recs-mode-tabs" class="recs-tabs"></div>
         <div id="recs-tabs" class="recs-tabs"></div>
         <div id="recs-list" class="recs-list"></div>
       </section>
@@ -128,18 +141,31 @@
       </section>
     </section>
 
+    <!-- SEASON JOURNEY TAB -->
+    <section id="tab-journey" class="tab-panel" hidden>
+      <section class="card">
+        <div class="card-title">How this works</div>
+        <p class="rec-explainer">
+          Pulled in one call from FPL's own season-history record — no manual logging needed.
+          Updates automatically every time the Action runs.
+        </p>
+      </section>
+      <div id="journey-content">
+        <p class="empty-hint">Add your Team ID to config.json to see your season charted here.</p>
+      </div>
+    </section>
+
     <!-- CHIP SQUAD TAB -->
     <section id="tab-chips" class="tab-panel" hidden>
       <section class="card">
         <div class="card-title">How this works</div>
         <p class="rec-explainer">
-          Two independently optimized 15-man squads, built from scratch against the full player
-          pool using your current squad value + bank as the budget — same constraints as a real
-          wildcard or free hit (2 GKP / 5 DEF / 5 MID / 3 FWD, max 3 players per club). Wildcard
-          maximizes predicted points over the next 5 gameweeks, since those picks stick around.
-          Free Hit maximizes just the next gameweek, since it reverts after one week — a genuinely
-          different squad, not the same one relabelled. This is a real optimizer (integer linear
-          programming), not a heuristic guess.
+          <b>Wildcard/Free Hit</b>: independently optimized 15-man squads (integer linear programming,
+          not a heuristic guess) against your real budget and real constraints. Wildcard maximizes the
+          next 5 gameweeks since those picks persist; Free Hit maximizes just the next one since it
+          reverts after a week. <b>Bench Boost/Triple Captain</b> use your CURRENT squad instead —
+          those chips don't let you rebuild, so the question is which upcoming gameweek suits the
+          players you already have.
         </p>
       </section>
       <div id="chips-tabs" class="recs-tabs"></div>
@@ -154,6 +180,12 @@
         <div class="card-title" id="league-title">Mini League</div>
         <div id="league-content">
           <p class="empty-hint">Configure mini_league_id in config.json to track a league.</p>
+        </div>
+      </section>
+      <section class="card">
+        <div class="card-title">Rival Intelligence</div>
+        <div id="rival-content">
+          <p class="empty-hint">Populates once this gameweek's deadline has passed for the league.</p>
         </div>
       </section>
     </section>
