@@ -6,7 +6,9 @@
 <title>Mishra's Thirteen — FPL Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css" />
+<!-- Bump ?v=N on style.css and app.js below with every future update — browsers
+     otherwise cache the old file and new features/fixes silently don't appear. -->
+<link rel="stylesheet" href="style.css?v=5" />
 </head>
 <body>
   <div id="app">
@@ -24,21 +26,21 @@
     <div id="today-bar" class="today-bar"></div>
 
     <nav class="tabs" role="tablist">
-      <div class="tab-group">
+      <div class="tab-group" data-accent="squad">
         <span class="tab-group-label">My Squad</span>
         <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
         <button class="tab-btn" data-tab="myteam" role="tab" aria-selected="false">My Team</button>
         <button class="tab-btn" data-tab="journey" role="tab" aria-selected="false">Season Journey</button>
         <button class="tab-btn" data-tab="chips" role="tab" aria-selected="false">Chip Squad</button>
       </div>
-      <div class="tab-group">
+      <div class="tab-group" data-accent="research">
         <span class="tab-group-label">Research</span>
         <button class="tab-btn" data-tab="players" role="tab" aria-selected="false">All Players</button>
         <button class="tab-btn" data-tab="recs" role="tab" aria-selected="false">Recommendations</button>
         <button class="tab-btn" data-tab="stats" role="tab" aria-selected="false">Attacking/Defending</button>
         <button class="tab-btn" data-tab="prices" role="tab" aria-selected="false">Price Changes</button>
       </div>
-      <div class="tab-group">
+      <div class="tab-group" data-accent="league">
         <span class="tab-group-label">League</span>
         <button class="tab-btn" data-tab="league" role="tab" aria-selected="false">Mini League</button>
       </div>
@@ -67,16 +69,16 @@
       </section>
 
       <section class="card">
-        <div class="card-title">All 20 Teams — Fixture Difficulty Heatmap</div>
+        <div class="card-title">All 20 Teams — Fixture Difficulty, easiest to hardest</div>
         <div class="fdr-key">
           <span><i style="background:#1F7A4D"></i>Easiest</span>
           <span><i style="background:#34B871"></i></span>
           <span><i style="background:#5B6B62"></i></span>
           <span><i style="background:#C1443C"></i></span>
           <span><i style="background:#8A2C26"></i>Hardest</span>
-          <span class="fdr-key-note">Sorted easiest-run first · aligned by actual gameweek, blanks shown as gaps</span>
+          <span class="fdr-key-note">Score = average difficulty, 1 (easiest) to 5 (hardest)</span>
         </div>
-        <div id="team-fixture-heatmap" class="heatmap-grid"></div>
+        <div id="team-fixture-ticker" class="fixture-ticker"></div>
       </section>
     </section>
 
@@ -246,6 +248,6 @@
 
     <footer class="footer">Data from the official Fantasy Premier League API · refreshes automatically via GitHub Actions</footer>
   </div>
-  <script src="app.js"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

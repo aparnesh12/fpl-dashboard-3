@@ -166,7 +166,7 @@ async function init() {
     renderTodaySummary();
     renderTeamFilter();
     renderMyFixtureTicker();
-    renderTeamFixtureHeatmap();
+    renderTeamFixtureTicker();
     renderSquad();
     renderTableHead();
     renderTable();
@@ -277,16 +277,16 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 /* ---------- Pitch view (shared: My Squad + Chip Squad wildcard/free hit) ---------- */
 function renderPitchView(containerId, starters, bench) {
   const el = document.getElementById(containerId);
-  let html = '<div class="pitch">';
+  let html = '<div class="pitch-wrap"><div class="pitch">';
   Object.keys(PITCH_ROWS).forEach((pos) => {
     const list = starters[pos] || [];
     if (!list.length) return;
     html += `<div class="pitch-row" style="top:${PITCH_ROWS[pos]}%">`;
     list.forEach((p) => {
-      const capTag = p.isCaptain ? '<span class="pitch-chip-cap">C</span>' : (p.isVice ? '<span class="pitch-chip-cap" style="color:var(--chalk-dim)">V</span>' : '');
-      html += `<div class="pitch-chip${p.isCaptain ? ' captain' : ''}">
-        <div class="pitch-chip-name">${escapeHtml(p.name)}${capTag}</div>
-        ${p.sub ? `<div class="pitch-chip-sub">${escapeHtml(p.sub)}</div>` : ''}
+      const cBadge = p.isCaptain ? '<span class="pitch-shirt-c">C</span>' : (p.isVice ? '<span class="pitch-shirt-c" style="background:var(--chalk-dim)">V</span>' : '');
+      html += `<div class="pitch-chip${p.isCaptain ? ' captain' : ''}" data-tip="${escapeAttr(p.name + (p.sub ? ' · ' + p.sub : ''))}">
+        <div class="pitch-shirt">${cBadge}</div>
+        <div class="pitch-chip-name">${escapeHtml(p.name)}</div>
       </div>`;
     });
     html += '</div>';
@@ -295,13 +295,14 @@ function renderPitchView(containerId, starters, bench) {
   if (bench && bench.length) {
     html += '<div class="pitch-bench-strip"><div class="pitch-bench-label">Bench</div>';
     bench.forEach((p) => {
-      html += `<div class="pitch-chip bench-row">
+      html += `<div class="pitch-chip" data-tip="${escapeAttr(p.name + (p.sub ? ' · ' + p.sub : ''))}">
+        <div class="pitch-shirt"></div>
         <div class="pitch-chip-name">${escapeHtml(p.name)}</div>
-        ${p.sub ? `<div class="pitch-chip-sub">${escapeHtml(p.sub)}</div>` : ''}
       </div>`;
     });
     html += '</div>';
   }
+  html += '</div>';
   el.innerHTML = html;
 }
 
@@ -400,38 +401,64 @@ function renderMyFixtureTicker() {
     });
 }
 
-/* ---------- All 20 teams' fixture heatmap (Overview), grid-aligned by real GW number ---------- */
-function renderTeamFixtureHeatmap() {
-  const el = document.getElementById('team-fixture-heatmap');
+/* ---------- All 20 teams' fixture difficulty (Overview), ticker-style with score badge ---------- */
+function renderTeamFixtureTicker() {
+  const wrap = document.getElementById('team-fixture-ticker');
   const scores = state.teamFixtureScores || [];
   if (!scores.length) {
-    el.innerHTML = '<p class="empty-hint">No fixture data yet.</p>';
+    wrap.innerHTML = '<p class="empty-hint">No fixture data yet.</p>';
     return;
   }
   const allGws = new Set();
   scores.forEach((t) => t.fixtures.forEach((f) => allGws.add(f.gw)));
   const gwList = [...allGws].sort((a, b) => a - b).slice(0, 6);
-  el.style.gridTemplateColumns = `46px repeat(${gwList.length || 1}, 1fr)`;
 
-  let html = '<div></div>';
-  gwList.forEach((gw) => { html += `<div class="heatmap-gw-label">GW${gw}</div>`; });
-
+  wrap.innerHTML = '';
   scores.forEach((t) => {
-    const scoreLabel = t.score !== null ? t.score.toFixed(1) : 'n/a';
-    html += `<div class="heatmap-team-label" data-tip="Fixture score ${scoreLabel} across ${t.fixtures.length} upcoming games — lower is easier">${escapeHtml(t.team)}</div>`;
+    const row = document.createElement('div');
+    row.className = 'ticker-row';
+
+    const label = document.createElement('div');
+    label.className = 'ticker-team';
+    label.textContent = t.team_name || t.team;
+    label.setAttribute('data-tip', t.team_name && t.team_name !== t.team ? `${t.team_name} (${t.team})` : t.team);
+    row.appendChild(label);
+
+    const scoreEl = document.createElement('div');
+    scoreEl.className = 'ticker-score';
+    if (t.score !== null) {
+      scoreEl.style.background = fixtureScoreColor(t.score);
+      scoreEl.textContent = t.score.toFixed(1);
+      scoreEl.setAttribute('data-tip', `Average difficulty across ${t.fixtures.length} upcoming fixture${t.fixtures.length === 1 ? '' : 's'}. Lower is easier.`);
+    } else {
+      scoreEl.style.background = '#5B6B62';
+      scoreEl.textContent = '—';
+    }
+    row.appendChild(scoreEl);
+
+    const cellsWrap = document.createElement('div');
+    cellsWrap.className = 'ticker-cells';
     const byGw = {};
     t.fixtures.forEach((f) => { byGw[f.gw] = f; });
     gwList.forEach((gw) => {
       const f = byGw[gw];
+      const cell = document.createElement('div');
+      cell.className = 'ticker-cell';
       if (f) {
-        const tip = `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`;
-        html += `<div class="heatmap-cell" style="background:${DIFFICULTY_COLORS[f.difficulty] || '#5B6B62'}" data-tip="${escapeAttr(tip)}">${f.is_home ? '' : '@'}${escapeHtml(f.opponent)}</div>`;
+        cell.style.background = DIFFICULTY_COLORS[f.difficulty] || '#5B6B62';
+        cell.textContent = (f.is_home ? '' : '@') + f.opponent;
+        cell.setAttribute('data-tip', `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`);
       } else {
-        html += `<div class="heatmap-cell" style="background:rgba(91,107,98,0.2); color:var(--chalk-dim);">–</div>`;
+        cell.style.background = 'rgba(91,107,98,0.25)';
+        cell.style.color = 'var(--chalk-dim)';
+        cell.textContent = '–';
+        cell.setAttribute('data-tip', `GW${gw} — blank gameweek`);
       }
+      cellsWrap.appendChild(cell);
     });
+    row.appendChild(cellsWrap);
+    wrap.appendChild(row);
   });
-  el.innerHTML = html;
 }
 
 /* ---------- All Players table ---------- */
@@ -701,7 +728,7 @@ function renderLineChart(containerId, points, options = {}) {
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${scaleX(p.x).toFixed(1)} ${scaleY(p.y).toFixed(1)}`).join(' ');
   const baseY = (padding.top + plotH).toFixed(1);
   const areaD = `${pathD} L ${scaleX(xs[xs.length - 1]).toFixed(1)} ${baseY} L ${scaleX(xs[0]).toFixed(1)} ${baseY} Z`;
-  const color = options.color || '#34B871';
+  const color = options.color || '#00FF85';
 
   const dots = points.map((p) => {
     const label = p.label || (options.yFormat ? options.yFormat(p.y) : String(p.y));
@@ -751,15 +778,15 @@ function renderSeasonJourney() {
 
   const rankPoints = gws.filter((g) => g.overall_rank != null).map((g) => ({ x: g.gw, y: g.overall_rank }));
   renderLineChart('journey-rank-chart', rankPoints, {
-    invertY: true, color: '#34B871',
+    invertY: true, color: '#00FF85',
     yFormat: (v) => (v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v.toLocaleString()),
   });
 
   const ptsPoints = gws.map((g) => ({ x: g.gw, y: g.points, label: `GW${g.gw}: ${g.points} pts${g.chip ? ' · ' + g.chip : ''}` }));
-  renderLineChart('journey-points-chart', ptsPoints, { color: '#E8A33D', yFormat: (v) => Math.round(v) });
+  renderLineChart('journey-points-chart', ptsPoints, { color: '#FF3D82', yFormat: (v) => Math.round(v) });
 
   const valuePoints = gws.map((g) => ({ x: g.gw, y: g.value, label: `GW${g.gw}: £${g.value.toFixed(1)}m` }));
-  renderLineChart('journey-value-chart', valuePoints, { color: '#34B871', yFormat: (v) => `£${v.toFixed(1)}m` });
+  renderLineChart('journey-value-chart', valuePoints, { color: '#04F5FF', yFormat: (v) => `£${v.toFixed(1)}m` });
 }
 
 /* ---------- Chip Squad (Wildcard/Free Hit via pitch view, Bench Boost/Triple Captain via lists) ---------- */
