@@ -226,6 +226,7 @@ body {
   gap: 4px;
 }
 .ticker-cell {
+  position: relative;
   min-width: 52px;
   text-align: center;
   padding: 5px 6px;
@@ -235,6 +236,15 @@ body {
   font-weight: 600;
   color: var(--chalk);
   white-space: nowrap;
+}
+.ticker-cell.has-history::after {
+  content: '';
+  position: absolute;
+  top: 2px; right: 2px;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 0 1px rgba(11,6,15,0.5);
 }
 
 /* Info tooltips (used on table headers and status badges).

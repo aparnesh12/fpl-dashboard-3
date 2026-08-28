@@ -2,9 +2,9 @@ name: Update FPL Data
 
 "on":
   schedule:
-    # Once a day. GitHub may delay scheduled runs slightly at busy times —
+    # Every 3 hours. GitHub may delay scheduled runs slightly at busy times —
     # that's normal. Adjust the cron expression below to change cadence.
-    - cron: '0 3 * * *'
+    - cron: '0 */3 * * *'
   workflow_dispatch: {} # adds a manual "Run workflow" button in the Actions tab
 
 permissions:

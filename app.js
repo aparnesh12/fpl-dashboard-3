@@ -167,7 +167,6 @@ async function init() {
     renderTeamFilter();
     renderMyFixtureTicker();
     renderTeamFixtureTicker();
-    renderSquad();
     renderTableHead();
     renderTable();
     renderRecsModeTabs();
@@ -207,17 +206,24 @@ function renderTodaySummary() {
 
   if (state.meta.gw_deadline) {
     const deadline = new Date(state.meta.gw_deadline);
+    const istText = new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(deadline);
     const diffMs = deadline - new Date();
-    let text, cls = '';
-    if (diffMs <= 0) {
-      text = 'Passed';
-    } else {
-      const days = Math.floor(diffMs / 86400000);
-      const hours = Math.floor((diffMs % 86400000) / 3600000);
-      text = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
-      if (diffMs < 86400000) cls = 'alert';
+    const isUrgent = diffMs > 0 && diffMs < 86400000;
+    chips.push({ label: `GW${state.meta.current_gw || '?'} Deadline`, value: `${istText} IST`, cls: isUrgent ? 'alert' : '' });
+  }
+
+  const journeyGws = state.seasonJourney && state.seasonJourney.gameweeks;
+  if (journeyGws && journeyGws.length) {
+    const latest = journeyGws[journeyGws.length - 1];
+    if (latest.overall_rank != null) {
+      chips.push({ label: 'Overall Rank', value: `#${latest.overall_rank.toLocaleString()}`, cls: '' });
     }
-    chips.push({ label: `GW${state.meta.current_gw || '?'} Deadline`, value: text, cls });
+    if (latest.rank != null) {
+      chips.push({ label: `GW${latest.gw} Rank`, value: `#${latest.rank.toLocaleString()}`, cls: '' });
+    }
   }
 
   const squad = state.meta.squad;
@@ -306,32 +312,6 @@ function renderPitchView(containerId, starters, bench) {
   el.innerHTML = html;
 }
 
-/* ---------- Squad (Overview) ---------- */
-function renderSquad() {
-  const squad = state.meta.squad;
-  const section = document.getElementById('squad-section');
-  if (!squad || !squad.picks || !squad.picks.length) {
-    section.hidden = true;
-    return;
-  }
-  section.hidden = false;
-  document.getElementById('squad-gw').textContent = squad.gw;
-
-  const byId = {};
-  state.players.forEach((p) => { byId[p.id] = p; });
-
-  const starters = { GKP: [], DEF: [], MID: [], FWD: [] };
-  const bench = [];
-  [...squad.picks].sort((a, b) => a.position - b.position).forEach((pick) => {
-    const p = byId[pick.element];
-    if (!p) return;
-    const entry = { name: p.name, isCaptain: pick.is_captain, isVice: pick.is_vice_captain, sub: p.pos };
-    if (pick.multiplier === 0) bench.push(entry);
-    else starters[p.pos].push(entry);
-  });
-  renderPitchView('squad-pitch', starters, bench);
-}
-
 /* ---------- My Players' fixture ticker (Overview) ---------- */
 function fixtureScoreColor(avg) {
   if (avg <= 1.75) return '#1F7A4D';
@@ -388,12 +368,18 @@ function renderMyFixtureTicker() {
         cell.textContent = 'BLANK';
         cellsWrap.appendChild(cell);
       }
-      fixList.forEach((f) => {
+      fixList.forEach((f, idx) => {
         const cell = document.createElement('div');
         cell.className = 'ticker-cell';
         cell.style.background = DIFFICULTY_COLORS[f.difficulty] || '#5B6B62';
         cell.textContent = (f.is_home ? '' : '@') + f.opponent;
-        cell.setAttribute('data-tip', `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`);
+        let tip = `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`;
+        const h = p.fixture_history && p.fixture_history[idx];
+        if (h) {
+          tip += ` — history vs ${h.opponent}: ${h.matches} apps, avg ${h.avg_points}pts (best ${h.best_points}), ${h.seasons.join(' & ')}.`;
+          cell.classList.add('has-history');
+        }
+        cell.setAttribute('data-tip', tip);
         cellsWrap.appendChild(cell);
       });
       row.appendChild(cellsWrap);

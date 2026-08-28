@@ -327,6 +327,17 @@ def build_players(bootstrap, fixtures, teams_by_id, current_gw, ict_pending, his
             if first_gw in pred_by_gw:
                 pred_by_gw[first_gw] = round(pred_by_gw[first_gw] + hist_bonus, 1)
 
+        # History against EVERY upcoming opponent in the window, not just the
+        # next one — powers the fixture-difficulty ticker's per-cell detail.
+        # Reuses the same lookup as the single-opponent bonus above; cheap,
+        # since it's dictionary lookups against already-loaded data, not a
+        # new network call.
+        fixture_history = []
+        for fx in team_fixtures:
+            fx_opp_short = teams_by_id.get(fx["opponent_id"], {}).get("short_name")
+            _, fx_hist_detail = opponent_history(full_name, fx_opp_short, vs_opponent, overall, seasons_used)
+            fixture_history.append(fx_hist_detail)
+
         status = el.get("status", "a")
         players.append(
             {
@@ -378,6 +389,7 @@ def build_players(bootstrap, fixtures, teams_by_id, current_gw, ict_pending, his
                 "pred_by_gw": pred_by_gw,
                 "next_opponent": next_opp_id,
                 "history_vs_next_opp": hist_detail,
+                "fixture_history": fixture_history,
             }
         )
     return players
@@ -448,6 +460,7 @@ def build_differential_finder(players, squad_element_ids):
                 "ppm": p["ppm"],
                 "status": p["status"],
                 "owned": p["id"] in squad_element_ids,
+                "history_vs_next_opp": p["history_vs_next_opp"],
             }
             for p in ranked
         ]
