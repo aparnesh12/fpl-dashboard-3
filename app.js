@@ -4,7 +4,6 @@ const state = {
   fixtures: {},
   recommendations: {},
   differentials: {},
-  teamRating: null,
   chipSquads: null,
   benchBoostPlan: null,
   tripleCaptainPlan: null,
@@ -137,7 +136,7 @@ window.addEventListener('resize', () => { if (activeTipAnchor) positionTooltip(a
 
 async function init() {
   try {
-    const [players, teams, fixtures, recommendations, differentials, teamRating, chipSquads,
+    const [players, teams, fixtures, recommendations, differentials, chipSquads,
            benchBoostPlan, tripleCaptainPlan, miniLeague, rivalIntelligence, seasonJourney,
            teamFixtureScores, priceChanges, meta] = await Promise.all([
       loadJSON('data/players.json'),
@@ -145,7 +144,6 @@ async function init() {
       loadJSON('data/fixtures.json'),
       loadJSON('data/recommendations.json'),
       loadJSON('data/differentials.json').catch(() => ({})),
-      loadJSON('data/team_rating.json').catch(() => null),
       loadJSON('data/chip_squads.json').catch(() => null),
       loadJSON('data/bench_boost_plan.json').catch(() => null),
       loadJSON('data/triple_captain_plan.json').catch(() => null),
@@ -157,7 +155,7 @@ async function init() {
       loadJSON('data/meta.json'),
     ]);
     Object.assign(state, {
-      players, teams, fixtures, recommendations, differentials, teamRating, chipSquads,
+      players, teams, fixtures, recommendations, differentials, chipSquads,
       benchBoostPlan, tripleCaptainPlan, miniLeague, rivalIntelligence, seasonJourney,
       teamFixtureScores, priceChanges, meta,
     });
@@ -172,7 +170,6 @@ async function init() {
     renderRecsModeTabs();
     renderRecsTabs();
     renderRecsList();
-    renderMyTeam();
     renderChipsTabs();
     renderChipsContent();
     renderMiniLeague();
@@ -212,7 +209,7 @@ function renderTodaySummary() {
     }).format(deadline);
     const diffMs = deadline - new Date();
     const isUrgent = diffMs > 0 && diffMs < 86400000;
-    chips.push({ label: `GW${state.meta.current_gw || '?'} Deadline`, value: `${istText} IST`, cls: isUrgent ? 'alert' : '' });
+    chips.push({ label: `GW${state.meta.deadline_gw || state.meta.current_gw || '?'} Deadline`, value: `${istText} IST`, cls: isUrgent ? 'alert' : '' });
   }
 
   const journeyGws = state.seasonJourney && state.seasonJourney.gameweeks;
@@ -374,7 +371,7 @@ function renderMyFixtureTicker() {
         cell.style.background = DIFFICULTY_COLORS[f.difficulty] || '#5B6B62';
         cell.textContent = (f.is_home ? '' : '@') + f.opponent;
         let tip = `GW${f.gw} — ${f.is_home ? 'Home' : 'Away'} vs ${f.opponent} (FDR ${f.difficulty})`;
-        const h = p.fixture_history && p.fixture_history[idx];
+        const h = p.fixture_history && p.fixture_history[f.gw];
         if (h) {
           tip += ` — history vs ${h.opponent}: ${h.matches} apps, avg ${h.avg_points}pts (best ${h.best_points}), ${h.seasons.join(' & ')}.`;
           cell.classList.add('has-history');
@@ -624,7 +621,7 @@ function renderRecsList() {
     row.innerHTML = `
       <div class="rec-rank">${idx + 1}</div>
       <div class="rec-name-wrap">
-        <div class="rec-name">${escapeHtml(p.name)}${p.owned ? '<span class="rec-owned-tag">SQUAD</span>' : ''}</div>
+        <div class="rec-name">${escapeHtml(p.name)}${p.owned ? '<span class="rec-owned-tag">SQUAD</span>' : ''}${statusBadgeHtml(p)}</div>
         <div class="rec-sub">${escapeHtml(p.team)} · £${p.price.toFixed(1)}m · PPM ${p.ppm.toFixed(1)}${ownSub}</div>
         ${histLine}
       </div>
@@ -633,55 +630,6 @@ function renderRecsList() {
     `;
     wrap.appendChild(row);
   });
-}
-
-/* ---------- My Team ---------- */
-function renderMyTeam() {
-  const wrap = document.getElementById('myteam-content');
-  const rating = state.teamRating;
-  if (!rating) {
-    wrap.innerHTML = '<p class="empty-hint">Add your Team ID to config.json to rate your squad.</p>';
-    return;
-  }
-  const tier = rating.overall >= 70 ? '' : rating.overall >= 45 ? 'mid' : 'low';
-  const label = rating.overall >= 80 ? 'Excellent squad — strong across the board.'
-    : rating.overall >= 65 ? 'Solid squad with room to sharpen.'
-    : rating.overall >= 45 ? 'Average — a few clear upgrade paths.'
-    : 'Struggling — worth a serious look at transfers.';
-
-  const comps = [
-    ['Scoring Strength', rating.components.scoring_strength,
-      `Your 15's predicted points vs the best possible squad under the same position quotas (${rating.squad_total_pred_next5} of ${rating.best_possible_pred_next5} predicted pts, next 5 GWs).`],
-    ['Value Efficiency', rating.components.value_efficiency,
-      "Your squad's average points-per-million vs the league-wide average among players who've actually played minutes."],
-    ['Availability', rating.components.availability,
-      `${rating.flagged_players.length} of 15 players currently flagged (injured, doubtful, or suspended).`],
-    ['Captaincy', rating.components.captaincy,
-      rating.captain_is_optimal ? 'Your captain is your squad\u2019s best starting option right now.' : `Your captain (${rating.captain_name}) isn\u2019t your highest predicted scorer \u2014 ${rating.best_captain_option} is, for next gameweek.`],
-  ];
-
-  let html = `
-    <div class="rating-hero">
-      <div class="rating-score ${tier}">${rating.overall}</div>
-      <div class="rating-label">${escapeHtml(label)}</div>
-    </div>
-    <div class="rating-components">
-      ${comps.map(([lbl, val, note]) => `
-        <div class="rating-bar-wrap" data-tip="${escapeAttr(note)}">
-          <div class="rating-bar-label"><span>${escapeHtml(lbl)}</span><span>${val.toFixed(0)}</span></div>
-          <div class="rating-bar-track"><div class="rating-bar-fill" style="width:${Math.max(0, Math.min(100, val))}%"></div></div>
-        </div>
-      `).join('')}
-    </div>
-  `;
-
-  if (!rating.captain_is_optimal && rating.best_captain_option) {
-    html += `<div class="rating-note">Consider captaining ${escapeHtml(rating.best_captain_option)} instead of ${escapeHtml(rating.captain_name)} for next gameweek \u2014 higher predicted points.</div>`;
-  }
-  if (rating.flagged_players.length) {
-    html += `<div class="rating-flagged">Flagged: ${rating.flagged_players.map((p) => `${escapeHtml(p.name)} (${escapeHtml(p.status_label)})`).join(', ')}</div>`;
-  }
-  wrap.innerHTML = html;
 }
 
 /* ---------- Season Journey (hand-rolled SVG line charts, no external library) ---------- */
@@ -817,9 +765,13 @@ function renderTripleCaptainContent(wrap) {
   }
   let html = '<div class="recs-list">';
   plan.candidates.forEach((c, idx) => {
+    const h = c.history_vs_opp;
+    const histLine = h
+      ? `<div class="rec-sub rec-hist">vs ${escapeHtml(h.opponent)} before: ${h.matches} apps, avg ${h.avg_points}pts (best ${h.best_points})</div>`
+      : '';
     html += `<div class="rec-row${idx === 0 ? ' owned' : ''}">
       <div class="rec-rank">${idx === 0 ? '★' : idx + 1}</div>
-      <div class="rec-name-wrap"><div class="rec-name">${escapeHtml(c.name)}${idx === 0 ? '<span class="rec-owned-tag">BEST</span>' : ''}</div><div class="rec-sub">${escapeHtml(c.team)} · best in GW${c.gw}</div></div>
+      <div class="rec-name-wrap"><div class="rec-name">${escapeHtml(c.name)}${idx === 0 ? '<span class="rec-owned-tag">BEST</span>' : ''}</div><div class="rec-sub">${escapeHtml(c.team)} · best in GW${c.gw}</div>${histLine}</div>
       <div class="rec-stat"><div class="rec-stat-value">${c.projected_points.toFixed(1)}</div><div class="rec-stat-label">at 3x</div></div>
     </div>`;
   });
@@ -911,10 +863,44 @@ function renderRivalIntelligence() {
   });
   html += `</div>`;
 
+  if (intel.trending_in && intel.trending_in.length) {
+    html += `<div class="card-title">Trending In This Gameweek</div><div class="squad-list" style="margin-bottom:16px;">`;
+    intel.trending_in.forEach((c) => {
+      html += `<div class="squad-chip">${escapeHtml(c.name)} <span class="rec-owned-tag">${c.count}</span></div>`;
+    });
+    html += `</div>`;
+  }
+
   if (intel.chips_played.length) {
-    html += `<div class="card-title">Chips Played This Gameweek</div><div class="squad-list">`;
+    html += `<div class="card-title">Chips Played This Gameweek</div><div class="squad-list" style="margin-bottom:16px;">`;
     intel.chips_played.forEach((c) => {
       html += `<div class="squad-chip bench">${escapeHtml(c.entry_name)}: ${escapeHtml(c.chip)}</div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `<div class="card-title">Transfers This Gameweek</div>`;
+  const activeRivals = intel.rivals.filter((r) => r.transfers_made > 0);
+  if (!activeRivals.length) {
+    html += `<p class="empty-hint">No transfers made in the league this gameweek yet.</p>`;
+  } else {
+    html += `<div style="display:flex; flex-direction:column; gap:8px;">`;
+    activeRivals.forEach((r) => {
+      const parts = [];
+      const n = Math.max(r.transfers_in.length, r.transfers_out.length);
+      for (let i = 0; i < n; i++) {
+        const outName = r.transfers_out[i];
+        const inName = r.transfers_in[i];
+        if (outName && inName) parts.push(`${outName} \u2192 ${inName}`);
+        else if (inName) parts.push(`+${inName}`);
+        else if (outName) parts.push(`-${outName}`);
+      }
+      const detail = parts.length ? parts.join(', ') : `${r.transfers_made} transfer${r.transfers_made === 1 ? '' : 's'}`;
+      const hitText = r.transfer_cost > 0 ? ` <span style="color:var(--red)">(\u2212${r.transfer_cost} hit)</span>` : '';
+      html += `<div class="today-chip" style="flex:none;">
+        <div class="today-chip-label">${escapeHtml(r.entry_name)}</div>
+        <div class="today-chip-value" style="font-size:12px;">${escapeHtml(detail)}${hitText}</div>
+      </div>`;
     });
     html += `</div>`;
   }
