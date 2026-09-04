@@ -1,1 +1,1 @@
-null
+{"bench_players": [{"id": 496, "name": "Kinsky", "team": "TOT", "pos": "GKP"}, {"id": 127, "name": "Gomez", "team": "BHA", "pos": "MID"}, {"id": 173, "name": "Thomas", "team": "COV", "pos": "DEF"}, {"id": 259, "name": "Diop", "team": "IPS", "pos": "DEF"}], "by_gameweek": [{"gw": 4, "projected_bench_points": 10.6}, {"gw": 6, "projected_bench_points": 9.7}, {"gw": 8, "projected_bench_points": 8.9}, {"gw": 5, "projected_bench_points": 8.6}, {"gw": 7, "projected_bench_points": 8.5}], "best_gw": 4}
