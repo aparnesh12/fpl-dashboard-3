@@ -1,2 +1,7 @@
 requests>=2.31.0
-pulp>=2.8.0
+# Pinned below 3.0: PuLP 3.0/4.0 introduced comprehensive breaking API changes
+# (Rust-based core, LpVariable() construction removed, PULP_CBC_CMD removed).
+# An open-ended pin here would silently break every Action run once pip
+# picks up the newer major version — no files would update, with nothing
+# in the dashboard itself to signal why.
+pulp>=2.8.0,<3.0.0

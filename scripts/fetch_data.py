@@ -10,6 +10,7 @@ read-only endpoints.
 import csv
 import io
 import json
+import math
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -22,9 +23,9 @@ HISTORY_BASE = "https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League
 HISTORY_SEASONS = ["2025-26", "2024-25"]  # most recent completed seasons used for opponent history
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; fpl-dashboard/1.0)"}
 TIMEOUT = 20
-FIXTURE_WINDOW = 6       # how many gameweeks ahead the fixture ticker shows
+FIXTURE_WINDOW = 10      # how many gameweeks ahead fixture data is fetched — the frontend's
+                         # length selector (3/5/8/10) slices this client-side, no re-fetch needed
 PREDICT_WINDOW = 5       # how many gameweeks ahead "predicted next-5" covers
-RECS_PER_POSITION = 12   # how many players per position on the Recommendations tab
 MIN_HISTORY_MATCHES = 2  # need at least this many past meetings before trusting a history bonus
 SQUAD_QUOTAS = {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
 FORMATIONS = [(d, m, f) for d in range(3, 6) for m in range(2, 6) for f in [10 - d - m] if 1 <= f <= 3]
@@ -216,6 +217,68 @@ def build_team_fixture_scores(fixture_ticker, teams_by_id):
     return scored
 
 
+BASELINE_GOALS_PER_GAME = 1.45  # roughly the modern Premier League average
+
+
+def build_team_projections(teams, fixtures, n_gws=FIXTURE_WINDOW):
+    """Transparent Poisson-based xG and clean-sheet projections per team,
+    per upcoming fixture — built from FPL's own attack/defence strength
+    ratings (the same inputs FPL uses to compute its own FDR), not a
+    trained model. Attack/defence strength is compared against the current
+    league average rather than a fixed baseline, so it self-corrects as
+    ratings shift through the season. Clean-sheet probability uses the
+    standard Poisson P(X=0) = e^-lambda, lambda being projected goals
+    conceded — a well-established, checkable formula, not a black box.
+    A rating of 0 (missing/not yet set by FPL) falls back to the league
+    average rather than corrupting the ratio with a division by zero."""
+    teams_by_id = {t["id"]: t for t in teams}
+    n = len(teams) or 1
+    avg_attack = (sum(t["strength_attack_home"] + t["strength_attack_away"] for t in teams) / (2 * n)) or 1000
+    avg_defence = (sum(t["strength_defence_home"] + t["strength_defence_away"] for t in teams) / (2 * n)) or 1000
+
+    out = {}
+    for t in teams:
+        fx_list = team_upcoming_fixtures(fixtures, t["id"], n_gws)
+        fixtures_out = []
+        total_xg = 0.0
+        expected_clean_sheets = 0.0
+        for fx in fx_list:
+            opp = teams_by_id.get(fx["opponent_id"], {})
+            if fx["is_home"]:
+                own_attack = t.get("strength_attack_home") or avg_attack
+                own_defence = t.get("strength_defence_home") or avg_defence
+                opp_attack = opp.get("strength_attack_away") or avg_attack
+                opp_defence = opp.get("strength_defence_away") or avg_defence
+            else:
+                own_attack = t.get("strength_attack_away") or avg_attack
+                own_defence = t.get("strength_defence_away") or avg_defence
+                opp_attack = opp.get("strength_attack_home") or avg_attack
+                opp_defence = opp.get("strength_defence_home") or avg_defence
+
+            proj_xg = BASELINE_GOALS_PER_GAME * (own_attack / avg_attack) * (avg_defence / opp_defence)
+            proj_against = BASELINE_GOALS_PER_GAME * (opp_attack / avg_attack) * (avg_defence / own_defence)
+            cs_prob = math.exp(-proj_against) * 100
+
+            fixtures_out.append({
+                "gw": fx["gw"],
+                "opponent": opp.get("short_name", "?"),
+                "is_home": fx["is_home"],
+                "projected_xg": round(proj_xg, 2),
+                "clean_sheet_prob": round(cs_prob, 1),
+            })
+            total_xg += proj_xg
+            expected_clean_sheets += cs_prob / 100
+
+        out[t["id"]] = {
+            "team": t["short_name"],
+            "team_name": t["name"],
+            "fixtures": fixtures_out,
+            "total_xg": round(total_xg, 2),
+            "expected_clean_sheets": round(expected_clean_sheets, 2),
+        }
+    return out
+
+
 def price_change_confidence(percent):
     """Per FPL's own 2026/27 Price Change Predictor and how Fantasy Football
     Scout documents reading it: the percent is progress toward the next
@@ -395,84 +458,6 @@ def build_players(bootstrap, fixtures, teams_by_id, current_gw, ict_pending, his
             }
         )
     return players
-
-
-def build_recommendations(players, teams_by_id, squad_element_ids):
-    """Position-wise ranking by predicted next-5-gameweek points, which
-    already includes the opponent-history bonus computed in build_players
-    (see opponent_history()). 'Composite' = form + fixture run + minutes
-    reliability + opponent-history, fused into pred_next5 rather than kept
-    as a separate hidden score, so the ranking and the visible number never
-    disagree with each other."""
-    by_pos = {"GKP": [], "DEF": [], "MID": [], "FWD": []}
-    for p in players:
-        if p["status"] == "u":
-            continue
-        by_pos.setdefault(p["pos"], []).append(p)
-
-    out = {}
-    for pos, plist in by_pos.items():
-        ranked = sorted(plist, key=lambda p: p["pred_next5"], reverse=True)[:RECS_PER_POSITION]
-        out[pos] = [
-            {
-                "id": p["id"],
-                "name": p["name"],
-                "team": p["team"],
-                "price": p["price"],
-                "form": p["form"],
-                "pred_next": p["pred_next"],
-                "pred_next5": p["pred_next5"],
-                "ppm": p["ppm"],
-                "status": p["status"],
-                "status_label": p["status_label"],
-                "news": p["news"],
-                "chance_of_playing": p["chance_of_playing"],
-                "owned": p["id"] in squad_element_ids,
-                "history_vs_next_opp": p["history_vs_next_opp"],
-            }
-            for p in ranked
-        ]
-    return out
-
-
-DIFFERENTIAL_OWNERSHIP_THRESHOLD = 15.0  # percent
-
-
-def build_differential_finder(players, squad_element_ids):
-    """Same shape as Recommendations, filtered to selected_by% under
-    DIFFERENTIAL_OWNERSHIP_THRESHOLD — the players who could actually move
-    your mini-league rank. A template player rising or falling moves
-    everyone in the league together; a low-ownership player doing the same
-    only moves you."""
-    by_pos = {"GKP": [], "DEF": [], "MID": [], "FWD": []}
-    for p in players:
-        if p["status"] == "u" or p["selected_by"] >= DIFFERENTIAL_OWNERSHIP_THRESHOLD:
-            continue
-        by_pos.setdefault(p["pos"], []).append(p)
-
-    out = {}
-    for pos, plist in by_pos.items():
-        ranked = sorted(plist, key=lambda p: p["pred_next5"], reverse=True)[:RECS_PER_POSITION]
-        out[pos] = [
-            {
-                "id": p["id"],
-                "name": p["name"],
-                "team": p["team"],
-                "price": p["price"],
-                "selected_by": p["selected_by"],
-                "pred_next": p["pred_next"],
-                "pred_next5": p["pred_next5"],
-                "ppm": p["ppm"],
-                "status": p["status"],
-                "status_label": p["status_label"],
-                "news": p["news"],
-                "chance_of_playing": p["chance_of_playing"],
-                "owned": p["id"] in squad_element_ids,
-                "history_vs_next_opp": p["history_vs_next_opp"],
-            }
-            for p in ranked
-        ]
-    return out
 
 
 def optimize_squad(players, budget, objective_key="pred_next5"):
@@ -882,7 +867,6 @@ def main():
 
     print("Fetching squad (if configured)...")
     squad = build_squad(config, current_gw)
-    squad_element_ids = {p["element"] for p in squad["picks"]} if squad else set()
 
     print(f"Building opponent-history lookup from {HISTORY_SEASONS}...")
     history_data = build_history_lookup()
@@ -891,7 +875,7 @@ def main():
     players_by_id = {p["id"]: p for p in players}
     fixture_ticker = build_fixture_ticker(fixtures, teams_by_id)
     team_fixture_scores = build_team_fixture_scores(fixture_ticker, teams_by_id)
-    recommendations = build_recommendations(players, teams_by_id, squad_element_ids)
+    team_projections = build_team_projections(teams, fixtures)
     price_changes = build_price_changes(players)
 
     print("Building chip-optimal lineups...")
@@ -899,7 +883,6 @@ def main():
     chip_squads = build_chip_squads(players, wildcard_budget)
     bench_boost_plan = build_bench_boost_plan(squad, players_by_id)
     triple_captain_plan = build_triple_captain_plan(squad, players_by_id)
-    differentials = build_differential_finder(players, squad_element_ids)
 
     print("Fetching mini league (if configured)...")
     mini_league = build_mini_league(config, current_gw)
@@ -920,11 +903,11 @@ def main():
     with open(os.path.join(DATA_DIR, "team_fixture_scores.json"), "w") as f:
         json.dump(team_fixture_scores, f)
 
+    with open(os.path.join(DATA_DIR, "team_projections.json"), "w") as f:
+        json.dump(team_projections, f)
+
     with open(os.path.join(DATA_DIR, "price_changes.json"), "w") as f:
         json.dump(price_changes, f)
-
-    with open(os.path.join(DATA_DIR, "recommendations.json"), "w") as f:
-        json.dump(recommendations, f)
 
     with open(os.path.join(DATA_DIR, "chip_squads.json"), "w") as f:
         json.dump(chip_squads, f)
@@ -944,8 +927,10 @@ def main():
     with open(os.path.join(DATA_DIR, "triple_captain_plan.json"), "w") as f:
         json.dump(triple_captain_plan, f)
 
-    with open(os.path.join(DATA_DIR, "differentials.json"), "w") as f:
-        json.dump(differentials, f)
+    for stale_file in ("recommendations.json", "differentials.json"):
+        stale_path = os.path.join(DATA_DIR, stale_file)
+        if os.path.exists(stale_path):
+            os.remove(stale_path)
 
     meta = {
         "last_updated": datetime.now(timezone.utc).isoformat(),

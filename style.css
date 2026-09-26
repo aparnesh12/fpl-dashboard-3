@@ -390,6 +390,9 @@ tr.flagged .name-cell { color: var(--chalk-dim); }
 }
 .recs-pos-btn.active { background: var(--turf); color: var(--chalk); border-color: var(--turf); }
 .recs-list { display: flex; flex-direction: column; gap: 8px; }
+.window-control { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.window-control-label { font-family: var(--font-body); font-size: 12.5px; font-weight: 600; color: var(--chalk-dim); }
+.window-control .recs-tabs { margin-bottom: 0; }
 .rec-row {
   display: grid;
   grid-template-columns: 28px 1fr auto auto auto;
