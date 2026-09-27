@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <!-- Bump ?v=N on style.css and app.js below with every future update — browsers
      otherwise cache the old file and new features/fixes silently don't appear. -->
-<link rel="stylesheet" href="style.css?v=6" />
+<link rel="stylesheet" href="style.css?v=7" />
 </head>
 <body>
   <div id="app">
@@ -50,6 +50,15 @@
           <span class="window-control-label">Show next:</span>
           <div id="window-length-buttons" class="recs-tabs"></div>
         </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Suggested Swaps</div>
+        <p class="rec-explainer">
+          Best same-position replacement for each of your 15, within your bank — a targeted swap
+          search, not a full rebuild (Wildcard/Free Hit cover that). Click any name for full detail.
+        </p>
+        <div id="swap-suggestions-list"></div>
       </section>
 
       <section class="card">
@@ -98,6 +107,21 @@
             </thead>
             <tbody id="projections-rows"></tbody>
           </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Value &amp; DefCon Leaderboard</div>
+        <p class="rec-explainer">Top 8 by points-per-million and by defensive contribution per 90 — filtered to players who've actually played minutes. Click a name for full detail.</p>
+        <div class="leaderboard-grid">
+          <div>
+            <div class="leaderboard-subtitle">Best PPM</div>
+            <div id="ppm-leaderboard"></div>
+          </div>
+          <div>
+            <div class="leaderboard-subtitle">Best DC/90</div>
+            <div id="defcon-leaderboard"></div>
+          </div>
         </div>
       </section>
     </section>
@@ -211,8 +235,15 @@
       </section>
     </section>
 
+    <div id="player-modal-overlay" class="modal-overlay" hidden>
+      <div class="modal-card">
+        <button id="player-modal-close" class="modal-close" aria-label="Close">&times;</button>
+        <div id="player-modal-content"></div>
+      </div>
+    </div>
+
     <footer class="footer">Data from the official Fantasy Premier League API · refreshes automatically via GitHub Actions</footer>
   </div>
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

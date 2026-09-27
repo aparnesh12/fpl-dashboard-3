@@ -11,6 +11,8 @@ const state = {
   teamFixtureScores: [],
   teamProjections: {},
   priceChanges: null,
+  swapSuggestions: null,
+  playerDetails: {},
   meta: {},
   sortKey: 'pred_next5',
   sortDir: 'desc',
@@ -152,7 +154,7 @@ async function init() {
   try {
     const [players, teams, fixtures, chipSquads, benchBoostPlan, tripleCaptainPlan,
            miniLeague, rivalIntelligence, seasonJourney, teamFixtureScores,
-           teamProjections, priceChanges, meta] = await Promise.all([
+           teamProjections, priceChanges, swapSuggestions, playerDetails, meta] = await Promise.all([
       loadJSON('data/players.json'),
       loadJSON('data/teams.json'),
       loadJSON('data/fixtures.json'),
@@ -165,21 +167,25 @@ async function init() {
       loadJSON('data/team_fixture_scores.json').catch(() => []),
       loadJSON('data/team_projections.json').catch(() => ({})),
       loadJSON('data/price_changes.json').catch(() => null),
+      loadJSON('data/swap_suggestions.json').catch(() => null),
+      loadJSON('data/player_details.json').catch(() => ({})),
       loadJSON('data/meta.json'),
     ]);
     Object.assign(state, {
       players, teams, fixtures, chipSquads, benchBoostPlan, tripleCaptainPlan,
       miniLeague, rivalIntelligence, seasonJourney, teamFixtureScores,
-      teamProjections, priceChanges, meta,
+      teamProjections, priceChanges, swapSuggestions, playerDetails, meta,
     });
 
     renderMeta();
     renderTodaySummary();
     renderTeamFilter();
     renderWindowLengthButtons();
+    renderSwapSuggestions();
     renderMyFixtureTicker();
     renderTeamFixtureTicker();
     renderTeamProjections();
+    renderLeaderboards();
     renderColumnGroupTabs();
     renderTableHead();
     renderTable();
@@ -306,6 +312,123 @@ function renderWindowLengthButtons() {
   });
 }
 
+/* ---------- Suggested Swaps (Overview) ---------- */
+function renderSwapSuggestions() {
+  const wrap = document.getElementById('swap-suggestions-list');
+  const suggestions = state.swapSuggestions;
+  if (!suggestions || !suggestions.length) {
+    wrap.innerHTML = '<p class="empty-hint">Add your Team ID to config.json, or no clear upgrade is available in your budget right now.</p>';
+    return;
+  }
+  wrap.innerHTML = suggestions.map((s) => `
+    <div class="rec-row">
+      <div class="rec-rank move-up">▲</div>
+      <div class="rec-name-wrap">
+        <div class="rec-name">
+          <span data-player-id="${s.out.id}">${escapeHtml(s.out.name)}</span>
+          <span style="color:var(--chalk-dim)"> → </span>
+          <span data-player-id="${s.in.id}">${escapeHtml(s.in.name)}</span>
+        </div>
+        <div class="rec-sub">${escapeHtml(s.out.team)} → ${escapeHtml(s.in.team)} · ${s.out.pos} · ${s.cost >= 0 ? '+' : ''}£${s.cost.toFixed(1)}m</div>
+      </div>
+      <div class="rec-stat"><div class="rec-stat-value move-up">+${s.gain.toFixed(1)}</div><div class="rec-stat-label">Next 5</div></div>
+    </div>
+  `).join('');
+}
+
+/* ---------- Value & DefCon Leaderboard (Overview) ---------- */
+function renderLeaderboards() {
+  const active = state.players.filter((p) => p.status !== 'u' && p.minutes > 0);
+  const byPPM = [...active].sort((a, b) => b.ppm - a.ppm).slice(0, 8);
+  const byDC = [...active].sort((a, b) => b.def_con_p90 - a.def_con_p90).slice(0, 8);
+
+  const rowHtml = (p, value) => `
+    <div class="leaderboard-row" data-player-id="${p.id}">
+      <span class="leaderboard-name">${escapeHtml(p.name)}</span>
+      <span class="leaderboard-sub">${escapeHtml(p.team)} · ${p.pos}</span>
+      <span class="leaderboard-stat">${value}</span>
+    </div>`;
+
+  document.getElementById('ppm-leaderboard').innerHTML = byPPM.map((p) => rowHtml(p, p.ppm.toFixed(1))).join('');
+  document.getElementById('defcon-leaderboard').innerHTML = byDC.map((p) => rowHtml(p, p.def_con_p90.toFixed(1))).join('');
+}
+
+/* ---------- Player detail modal ---------- */
+function openPlayerModal(playerId) {
+  const p = state.players.find((pl) => pl.id === playerId);
+  if (!p) return;
+  const detail = state.playerDetails[String(playerId)] || state.playerDetails[playerId] || {};
+  const history = detail.history || [];
+  const historyPast = detail.history_past || [];
+  const upcoming = (state.fixtures[p.team_id] || []).map((f) => ({
+    gw: f.gw, opponent: f.opponent, is_home: f.is_home, difficulty: f.difficulty,
+    predicted: p.pred_by_gw ? p.pred_by_gw[f.gw] : null,
+    hist: p.fixture_history ? p.fixture_history[f.gw] : null,
+  }));
+
+  let html = `<div class="modal-header">
+    <div class="modal-player-name">${escapeHtml(p.name)}</div>
+    <div class="modal-player-sub">${escapeHtml(p.team)} · ${p.pos} · £${p.price.toFixed(1)}m · ${p.selected_by.toFixed(1)}% owned ${statusBadgeHtml(p)}</div>
+  </div>`;
+
+  html += `<div class="modal-section-title">This Season</div>`;
+  if (history.length) {
+    html += `<div class="table-wrap"><table class="modal-table"><thead><tr>
+      <th>GW</th><th>Opp</th><th>Pts</th><th>Mins</th><th>G</th><th>A</th><th>CS</th><th>Bonus</th>
+    </tr></thead><tbody>`;
+    history.forEach((h) => {
+      html += `<tr><td>${h.gw}</td><td>${h.was_home ? '' : '@'}${escapeHtml(h.opponent)}</td><td><b>${h.points}</b></td><td>${h.minutes}</td><td>${h.goals}</td><td>${h.assists}</td><td>${h.clean_sheets}</td><td>${h.bonus}</td></tr>`;
+    });
+    html += `</tbody></table></div>`;
+  } else {
+    html += `<p class="empty-hint">No gameweek history yet this season.</p>`;
+  }
+
+  if (historyPast.length) {
+    html += `<div class="modal-section-title">Past Seasons</div>
+    <div class="table-wrap"><table class="modal-table"><thead><tr>
+      <th>Season</th><th>Pts</th><th>Mins</th><th>G</th><th>A</th>
+    </tr></thead><tbody>`;
+    historyPast.forEach((hp) => {
+      html += `<tr><td>${escapeHtml(hp.season)}</td><td>${hp.points}</td><td>${hp.minutes}</td><td>${hp.goals}</td><td>${hp.assists}</td></tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+
+  html += `<div class="modal-section-title">Upcoming Fixtures</div>`;
+  if (upcoming.length) {
+    html += `<div class="table-wrap"><table class="modal-table"><thead><tr>
+      <th>GW</th><th>Opp</th><th>FDR</th><th>Predicted</th><th>History vs Opp</th>
+    </tr></thead><tbody>`;
+    upcoming.forEach((u) => {
+      const fdrColor = DIFFICULTY_COLORS[u.difficulty] || '#5B6B62';
+      const histText = u.hist ? `${u.hist.matches} apps, avg ${u.hist.avg_points}pts` : '\u2014';
+      html += `<tr><td>${u.gw}</td><td>${u.is_home ? '' : '@'}${escapeHtml(u.opponent)}</td>
+        <td><span class="fdr-pill" style="background:${fdrColor}">${u.difficulty}</span></td>
+        <td>${u.predicted != null ? u.predicted.toFixed(1) : '\u2014'}</td>
+        <td>${escapeHtml(histText)}</td></tr>`;
+    });
+    html += `</tbody></table></div>`;
+  } else {
+    html += `<p class="empty-hint">No upcoming fixtures in the data window.</p>`;
+  }
+
+  document.getElementById('player-modal-content').innerHTML = html;
+  document.getElementById('player-modal-overlay').hidden = false;
+}
+
+function closePlayerModal() {
+  document.getElementById('player-modal-overlay').hidden = true;
+}
+document.getElementById('player-modal-close').addEventListener('click', closePlayerModal);
+document.getElementById('player-modal-overlay').addEventListener('click', (e) => {
+  if (e.target.id === 'player-modal-overlay') closePlayerModal();
+});
+document.addEventListener('click', (e) => {
+  const nameEl = e.target.closest('[data-player-id]');
+  if (nameEl) openPlayerModal(parseInt(nameEl.dataset.playerId, 10));
+});
+
 /* ---------- Pitch view (shared: Chip Squad wildcard/free hit) ---------- */
 function renderPitchView(containerId, starters, bench) {
   const el = document.getElementById(containerId);
@@ -369,6 +492,7 @@ function renderMyFixtureTicker() {
       const label = document.createElement('div');
       label.className = 'ticker-team';
       label.textContent = p.name;
+      label.setAttribute('data-player-id', p.id);
       row.appendChild(label);
 
       const fullList = state.fixtures[p.team_id] || [];
@@ -665,7 +789,7 @@ function renderTable() {
     if (statusFlagged(p)) tr.classList.add('flagged');
     tr.innerHTML = columns.map((col) =>
       col.key === 'name'
-        ? `<td class="name-cell">${escapeHtml(p.name)}</td>`
+        ? `<td class="name-cell" data-player-id="${p.id}">${escapeHtml(p.name)}</td>`
         : `<td>${cellHtml(col.key, p)}</td>`
     ).join('');
     frag.appendChild(tr);
@@ -914,6 +1038,16 @@ function renderRivalIntelligence() {
     html += `<div class="card-title">Trending In This Gameweek</div><div class="squad-list" style="margin-bottom:16px;">`;
     intel.trending_in.forEach((c) => {
       html += `<div class="squad-chip">${escapeHtml(c.name)} <span class="rec-owned-tag">${c.count}</span></div>`;
+    });
+    html += `</div>`;
+  }
+
+  if (intel.differential_erosion && intel.differential_erosion.length) {
+    html += `<div class="card-title">Differential Erosion</div>
+    <p class="rec-explainer" style="margin-bottom:10px;">Your low-ownership picks that a rival has also picked up — worth knowing before you count on them as a rank-mover.</p>
+    <div class="squad-list" style="margin-bottom:16px;">`;
+    intel.differential_erosion.forEach((e) => {
+      html += `<div class="squad-chip bench">${escapeHtml(e.player)} (${e.selected_by.toFixed(1)}%) \u2014 also owned by ${escapeHtml(e.owned_by.join(', '))}</div>`;
     });
     html += `</div>`;
   }

@@ -7,6 +7,7 @@ Runs on a GitHub Actions schedule — see .github/workflows/update-data.yml.
 No login, API key, or authentication required: these are public,
 read-only endpoints.
 """
+import concurrent.futures
 import csv
 import io
 import json
@@ -460,6 +461,116 @@ def build_players(bootstrap, fixtures, teams_by_id, current_gw, ict_pending, his
     return players
 
 
+PLAYER_DETAIL_MAX_WORKERS = 15
+
+
+def fetch_player_history(player_id):
+    """One player's element-summary — FPL's own per-player GW-by-GW record.
+    Best-effort: a single player's detail failing to load must never take
+    down the whole run, so any failure here returns None rather than raising."""
+    try:
+        return player_id, get(f"{BASE}/element-summary/{player_id}/")
+    except requests.RequestException:
+        return player_id, None
+
+
+def build_player_details(players, teams_by_id):
+    """This-season gameweek-by-gameweek history and past-season summaries
+    for every player, from FPL's own element-summary endpoint — the
+    canonical per-player record, not derived from anything else already
+    fetched. Upcoming fixtures are deliberately NOT refetched here: every
+    player object already carries pred_by_gw and fixture_history from
+    build_players(), which is exactly what a "future gameweeks" view needs,
+    so this only adds what's genuinely missing. Fetched concurrently
+    (bounded worker pool) since this is one call per player — sequentially
+    this would add minutes to every run for a feature opened on demand,
+    not read every time."""
+    details = {}
+    ids = [p["id"] for p in players]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=PLAYER_DETAIL_MAX_WORKERS) as pool:
+        for player_id, data in pool.map(fetch_player_history, ids):
+            if not data:
+                continue
+            history = [
+                {
+                    "gw": h.get("round"),
+                    "points": h.get("total_points", 0),
+                    "minutes": h.get("minutes", 0),
+                    "goals": h.get("goals_scored", 0),
+                    "assists": h.get("assists", 0),
+                    "clean_sheets": h.get("clean_sheets", 0),
+                    "bonus": h.get("bonus", 0),
+                    "bps": h.get("bps", 0),
+                    "ict_index": safe_float(h.get("ict_index")),
+                    "value": round(h.get("value", 0) / 10, 1),
+                    "was_home": h.get("was_home"),
+                    "opponent": teams_by_id.get(h.get("opponent_team"), {}).get("short_name", "?"),
+                }
+                for h in data.get("history", [])
+            ]
+            history_past = [
+                {
+                    "season": hp.get("season_name"),
+                    "points": hp.get("total_points", 0),
+                    "minutes": hp.get("minutes", 0),
+                    "goals": hp.get("goals_scored", 0),
+                    "assists": hp.get("assists", 0),
+                }
+                for hp in data.get("history_past", [])
+            ]
+            if history or history_past:
+                details[player_id] = {"history": history, "history_past": history_past}
+    return details
+
+
+SWAP_SUGGESTIONS_COUNT = 8
+
+
+def build_swap_suggestions(squad, players_by_id, players, n=SWAP_SUGGESTIONS_COUNT):
+    """For each player in your current squad, the single best available
+    same-position replacement within budget (bank plus what selling that
+    player raises), ranked by predicted-points gain over the next 5
+    gameweeks. A targeted swap search, not a full rebuild — Wildcard/Free
+    Hit already cover that. Excludes injured/suspended/unavailable
+    replacements, same exclusion the optimizer uses. Only positive-gain
+    swaps are returned; a squad with no clear upgrade available correctly
+    returns an empty list rather than padding it with sideways moves."""
+    if not squad or not squad.get("picks"):
+        return None
+    bank = squad.get("bank", 0)
+    squad_ids = {p["element"] for p in squad["picks"]}
+    squad_players = [players_by_id[p["element"]] for p in squad["picks"] if p["element"] in players_by_id]
+    if len(squad_players) < 15:
+        return None
+
+    pool_by_pos = {"GKP": [], "DEF": [], "MID": [], "FWD": []}
+    for p in players:
+        if p["id"] in squad_ids or p["status"] in ("u", "i", "s"):
+            continue
+        pool_by_pos.setdefault(p["pos"], []).append(p)
+
+    suggestions = []
+    for current in squad_players:
+        budget = round(bank + current["price"], 1)
+        candidates = [p for p in pool_by_pos.get(current["pos"], []) if p["price"] <= budget]
+        if not candidates:
+            continue
+        best = max(candidates, key=lambda p: p["pred_next5"])
+        gain = round(best["pred_next5"] - current["pred_next5"], 1)
+        if gain <= 0:
+            continue
+        suggestions.append({
+            "out": {"id": current["id"], "name": current["name"], "team": current["team"],
+                    "pos": current["pos"], "price": current["price"], "pred_next5": current["pred_next5"]},
+            "in": {"id": best["id"], "name": best["name"], "team": best["team"],
+                   "pos": best["pos"], "price": best["price"], "pred_next5": best["pred_next5"]},
+            "cost": round(best["price"] - current["price"], 1),
+            "gain": gain,
+        })
+    suggestions.sort(key=lambda s: -s["gain"])
+    return suggestions[:n]
+
+
 def optimize_squad(players, budget, objective_key="pred_next5"):
     """ILP-optimal 15-man squad: maximizes total objective_key subject to the
     real FPL constraints (2/5/5/3 by position, <=3 per club, total cost <=
@@ -710,15 +821,19 @@ def build_season_journey(config):
 RIVAL_FETCH_CAP = 30  # keep the mini-league scan bounded even for a larger league
 
 
-def build_rival_intelligence(standings, players_by_id, current_gw):
+DIFFERENTIAL_OWNERSHIP_THRESHOLD = 15.0  # percent — matches what counts as a differential elsewhere
+
+
+def build_rival_intelligence(standings, players_by_id, current_gw, my_entry_id=None, my_squad_ids=None):
     """For each rival in the mini-league, pulls their most recently locked
-    gameweek's picks AND transfers — captain, chip, and exactly who they
-    brought in/sent out this week — from the same public endpoints your own
-    squad uses. Only works once that gameweek's deadline has passed for
-    everyone, you included; before that there is nothing to fetch, same
-    limit as always. Best-effort per rival and per call: a manager who
-    hasn't set a team yet, a transient fetch error, or transfers being
-    unavailable is skipped/degraded rather than failing the whole run."""
+    gameweek's picks AND transfers — captain, chip, full squad, and exactly
+    who they brought in/sent out this week — from the same public endpoints
+    your own squad uses. Only works once that gameweek's deadline has
+    passed for everyone, you included; before that there is nothing to
+    fetch, same limit as always. Best-effort per rival and per call: a
+    manager who hasn't set a team yet, a transient fetch error, or
+    transfers being unavailable is skipped/degraded rather than failing
+    the whole run."""
     if not standings:
         return None
 
@@ -729,6 +844,7 @@ def build_rival_intelligence(standings, players_by_id, current_gw):
         except requests.RequestException:
             continue
         picks = picks_data.get("picks", [])
+        squad_ids = [p["element"] for p in picks]
         captain_pick = next((p for p in picks if p.get("is_captain")), None)
         captain_player = players_by_id.get(captain_pick["element"]) if captain_pick else None
         entry_history = picks_data.get("entry_history") or {}
@@ -759,6 +875,7 @@ def build_rival_intelligence(standings, players_by_id, current_gw):
             "transfer_cost": entry_history.get("event_transfers_cost", 0),
             "transfers_in": transfers_in,
             "transfers_out": transfers_out,
+            "squad_ids": squad_ids,
         })
 
     if not rivals:
@@ -782,12 +899,30 @@ def build_rival_intelligence(standings, players_by_id, current_gw):
         key=lambda x: -x["count"],
     )
 
+    # Differential erosion: which of YOUR low-ownership picks do rivals also
+    # own. A differential only stays a rank-swinging asset while it's
+    # actually differential — a rival quietly picking one up is exactly
+    # the signal that's easy to miss without this.
+    differential_erosion = []
+    if my_squad_ids:
+        for pid in my_squad_ids:
+            p = players_by_id.get(pid)
+            if not p or p["selected_by"] >= DIFFERENTIAL_OWNERSHIP_THRESHOLD:
+                continue
+            owners = [r["entry_name"] for r in rivals if r["entry"] != my_entry_id and pid in r["squad_ids"]]
+            if owners:
+                differential_erosion.append({
+                    "player": p["name"], "selected_by": p["selected_by"], "owned_by": owners,
+                })
+        differential_erosion.sort(key=lambda x: -len(x["owned_by"]))
+
     return {
         "gw": current_gw,
         "rivals": rivals,
         "captain_distribution": captain_distribution,
         "trending_in": trending_in,
         "chips_played": [{"entry_name": r["entry_name"], "chip": r["chip"]} for r in rivals if r["chip"]],
+        "differential_erosion": differential_erosion,
     }
 
 
@@ -883,13 +1018,21 @@ def main():
     chip_squads = build_chip_squads(players, wildcard_budget)
     bench_boost_plan = build_bench_boost_plan(squad, players_by_id)
     triple_captain_plan = build_triple_captain_plan(squad, players_by_id)
+    swap_suggestions = build_swap_suggestions(squad, players_by_id, players)
 
     print("Fetching mini league (if configured)...")
     mini_league = build_mini_league(config, current_gw)
-    rival_intelligence = build_rival_intelligence(mini_league["standings"], players_by_id, current_gw) if mini_league else None
+    my_squad_ids = {p["element"] for p in squad["picks"]} if squad else None
+    rival_intelligence = build_rival_intelligence(
+        mini_league["standings"], players_by_id, current_gw,
+        my_entry_id=config.get("fpl_team_id"), my_squad_ids=my_squad_ids,
+    ) if mini_league else None
 
     print("Fetching season journey (if configured)...")
     season_journey = build_season_journey(config)
+
+    print(f"Fetching per-player history for {len(players)} players (concurrent)...")
+    player_details = build_player_details(players, teams_by_id)
 
     with open(os.path.join(DATA_DIR, "players.json"), "w") as f:
         json.dump(players, f)
@@ -926,6 +1069,12 @@ def main():
 
     with open(os.path.join(DATA_DIR, "triple_captain_plan.json"), "w") as f:
         json.dump(triple_captain_plan, f)
+
+    with open(os.path.join(DATA_DIR, "swap_suggestions.json"), "w") as f:
+        json.dump(swap_suggestions, f)
+
+    with open(os.path.join(DATA_DIR, "player_details.json"), "w") as f:
+        json.dump(player_details, f)
 
     for stale_file in ("recommendations.json", "differentials.json"):
         stale_path = os.path.join(DATA_DIR, stale_file)
