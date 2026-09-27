@@ -69,6 +69,7 @@ const COLUMN_GROUPS = [
   ['stats', 'Attacking/Defending', STATS_COLUMNS],
   ['all', 'All', [...OVERVIEW_COLUMNS, ...STATS_COLUMNS]],
 ];
+const PLAYERS_TAB_OPTIONS = [...COLUMN_GROUPS.map(([k, l]) => [k, l]), ['leaderboard', 'Leaderboard']];
 let columnGroup = 'overview';
 
 const CHIP_TAB_DEFS = [
@@ -185,10 +186,8 @@ async function init() {
     renderMyFixtureTicker();
     renderTeamFixtureTicker();
     renderTeamProjections();
-    renderLeaderboards();
     renderColumnGroupTabs();
-    renderTableHead();
-    renderTable();
+    updatePlayersView();
     renderChipsTabs();
     renderChipsContent();
     renderMiniLeague();
@@ -633,22 +632,35 @@ document.querySelectorAll('#projections-table thead th').forEach((th) => {
   });
 });
 
-/* ---------- Players table (All Players + Attacking/Defending, merged with column-group toggle) ---------- */
+/* ---------- Players table (All Players + Attacking/Defending + Leaderboard) ---------- */
 function renderColumnGroupTabs() {
   const wrap = document.getElementById('column-group-tabs');
   wrap.innerHTML = '';
-  COLUMN_GROUPS.forEach(([key, label]) => {
+  PLAYERS_TAB_OPTIONS.forEach(([key, label]) => {
     const btn = document.createElement('button');
     btn.className = 'recs-pos-btn' + (key === columnGroup ? ' active' : '');
     btn.textContent = label;
     btn.addEventListener('click', () => {
       columnGroup = key;
       renderColumnGroupTabs();
-      renderTableHead();
-      renderTable();
+      updatePlayersView();
     });
     wrap.appendChild(btn);
   });
+}
+
+function updatePlayersView() {
+  const isLeaderboard = columnGroup === 'leaderboard';
+  document.getElementById('players-filters').hidden = isLeaderboard;
+  document.getElementById('players-table-wrap').hidden = isLeaderboard;
+  document.getElementById('row-count').hidden = isLeaderboard;
+  document.getElementById('players-leaderboard-wrap').hidden = !isLeaderboard;
+  if (isLeaderboard) {
+    renderLeaderboards();
+  } else {
+    renderTableHead();
+    renderTable();
+  }
 }
 
 function activeColumns() {
@@ -1033,14 +1045,6 @@ function renderRivalIntelligence() {
     html += `<div class="squad-chip">${escapeHtml(c.name)} <span class="rec-owned-tag">${c.count}</span></div>`;
   });
   html += `</div>`;
-
-  if (intel.trending_in && intel.trending_in.length) {
-    html += `<div class="card-title">Trending In This Gameweek</div><div class="squad-list" style="margin-bottom:16px;">`;
-    intel.trending_in.forEach((c) => {
-      html += `<div class="squad-chip">${escapeHtml(c.name)} <span class="rec-owned-tag">${c.count}</span></div>`;
-    });
-    html += `</div>`;
-  }
 
   if (intel.differential_erosion && intel.differential_erosion.length) {
     html += `<div class="card-title">Differential Erosion</div>

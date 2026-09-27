@@ -219,23 +219,62 @@ def build_team_fixture_scores(fixture_ticker, teams_by_id):
 
 
 BASELINE_GOALS_PER_GAME = 1.45  # roughly the modern Premier League average
+PROJECTION_SHRINK_GAMES = 6  # "virtual" league-average games blended into each
+                              # team's rate — dampens noise from a 1-2 game
+                              # sample early in the season, fades out as real
+                              # games accumulate (weight is games/(games+6))
 
 
 def build_team_projections(teams, fixtures, n_gws=FIXTURE_WINDOW):
     """Transparent Poisson-based xG and clean-sheet projections per team,
-    per upcoming fixture — built from FPL's own attack/defence strength
-    ratings (the same inputs FPL uses to compute its own FDR), not a
-    trained model. Attack/defence strength is compared against the current
-    league average rather than a fixed baseline, so it self-corrects as
-    ratings shift through the season. Clean-sheet probability uses the
-    standard Poisson P(X=0) = e^-lambda, lambda being projected goals
-    conceded — a well-established, checkable formula, not a black box.
-    A rating of 0 (missing/not yet set by FPL) falls back to the league
-    average rather than corrupting the ratio with a division by zero."""
+    per upcoming fixture — built from this season's ACTUAL match results
+    (goals scored and conceded in finished fixtures), not a trained model.
+    FPL's own strength_attack_*/strength_defence_* fields were the original
+    plan here, but they come back as flat 0 for every team in the live
+    2026/27 feed (confirmed against live data, not assumed) — using them
+    would silently produce the exact bug this replaces: every team getting
+    an identical projection. Real goals-for/against is self-sufficient and
+    doesn't depend on a field that's proven unreliable.
+
+    Rates are shrunk toward the league average by PROJECTION_SHRINK_GAMES
+    "virtual" games — a team with 1-2 games played shouldn't be treated as
+    confidently as one with 10; this fades out automatically as the season
+    goes. Clean-sheet probability uses the standard Poisson P(X=0) = e^-lambda,
+    lambda being projected goals conceded — a well-established, checkable
+    formula, not a black box."""
     teams_by_id = {t["id"]: t for t in teams}
+
+    goals_for = {t["id"]: 0 for t in teams}
+    goals_against = {t["id"]: 0 for t in teams}
+    games_played = {t["id"]: 0 for t in teams}
+    for fx in fixtures:
+        if not fx.get("finished"):
+            continue
+        h, a = fx.get("team_h"), fx.get("team_a")
+        hs, aws = fx.get("team_h_score"), fx.get("team_a_score")
+        if hs is None or aws is None:
+            continue
+        if h in goals_for:
+            goals_for[h] += hs
+            goals_against[h] += aws
+            games_played[h] += 1
+        if a in goals_for:
+            goals_for[a] += aws
+            goals_against[a] += hs
+            games_played[a] += 1
+
+    total_games = sum(games_played.values())
+    total_goals = sum(goals_for.values())
+    league_avg_gpg = (total_goals / total_games) if total_games else BASELINE_GOALS_PER_GAME
+
+    def shrunk_rate(goals, games):
+        return (goals + PROJECTION_SHRINK_GAMES * league_avg_gpg) / (games + PROJECTION_SHRINK_GAMES)
+
+    attack_rate = {tid: shrunk_rate(goals_for[tid], games_played[tid]) for tid in goals_for}
+    concede_rate = {tid: shrunk_rate(goals_against[tid], games_played[tid]) for tid in goals_against}
     n = len(teams) or 1
-    avg_attack = (sum(t["strength_attack_home"] + t["strength_attack_away"] for t in teams) / (2 * n)) or 1000
-    avg_defence = (sum(t["strength_defence_home"] + t["strength_defence_away"] for t in teams) / (2 * n)) or 1000
+    avg_attack_rate = (sum(attack_rate.values()) / n) or league_avg_gpg
+    avg_concede_rate = (sum(concede_rate.values()) / n) or league_avg_gpg
 
     out = {}
     for t in teams:
@@ -243,21 +282,15 @@ def build_team_projections(teams, fixtures, n_gws=FIXTURE_WINDOW):
         fixtures_out = []
         total_xg = 0.0
         expected_clean_sheets = 0.0
+        own_attack = attack_rate.get(t["id"], league_avg_gpg)
+        own_defence_concede = concede_rate.get(t["id"], league_avg_gpg)
         for fx in fx_list:
             opp = teams_by_id.get(fx["opponent_id"], {})
-            if fx["is_home"]:
-                own_attack = t.get("strength_attack_home") or avg_attack
-                own_defence = t.get("strength_defence_home") or avg_defence
-                opp_attack = opp.get("strength_attack_away") or avg_attack
-                opp_defence = opp.get("strength_defence_away") or avg_defence
-            else:
-                own_attack = t.get("strength_attack_away") or avg_attack
-                own_defence = t.get("strength_defence_away") or avg_defence
-                opp_attack = opp.get("strength_attack_home") or avg_attack
-                opp_defence = opp.get("strength_defence_home") or avg_defence
+            opp_attack = attack_rate.get(fx["opponent_id"], league_avg_gpg)
+            opp_concede = concede_rate.get(fx["opponent_id"], league_avg_gpg)
 
-            proj_xg = BASELINE_GOALS_PER_GAME * (own_attack / avg_attack) * (avg_defence / opp_defence)
-            proj_against = BASELINE_GOALS_PER_GAME * (opp_attack / avg_attack) * (avg_defence / own_defence)
+            proj_xg = own_attack * (opp_concede / avg_concede_rate) if avg_concede_rate else own_attack
+            proj_against = opp_attack * (own_defence_concede / avg_concede_rate) if avg_concede_rate else opp_attack
             cs_prob = math.exp(-proj_against) * 100
 
             fixtures_out.append({
@@ -890,15 +923,6 @@ def build_rival_intelligence(standings, players_by_id, current_gw, my_entry_id=N
         key=lambda x: -x["count"],
     )
 
-    transfer_in_counts = {}
-    for r in rivals:
-        for name in r["transfers_in"]:
-            transfer_in_counts[name] = transfer_in_counts.get(name, 0) + 1
-    trending_in = sorted(
-        [{"name": name, "count": count} for name, count in transfer_in_counts.items()],
-        key=lambda x: -x["count"],
-    )
-
     # Differential erosion: which of YOUR low-ownership picks do rivals also
     # own. A differential only stays a rank-swinging asset while it's
     # actually differential — a rival quietly picking one up is exactly
@@ -920,7 +944,6 @@ def build_rival_intelligence(standings, players_by_id, current_gw, my_entry_id=N
         "gw": current_gw,
         "rivals": rivals,
         "captain_distribution": captain_distribution,
-        "trending_in": trending_in,
         "chips_played": [{"entry_name": r["entry_name"], "chip": r["chip"]} for r in rivals if r["chip"]],
         "differential_erosion": differential_erosion,
     }
@@ -962,7 +985,7 @@ def main():
     bootstrap = get(f"{BASE}/bootstrap-static/")
 
     print("Fetching fixtures...")
-    fixtures = get(f"{BASE}/fixtures/?future=1")
+    fixtures = get(f"{BASE}/fixtures/")
 
     events = bootstrap["events"]
 

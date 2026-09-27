@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <!-- Bump ?v=N on style.css and app.js below with every future update — browsers
      otherwise cache the old file and new features/fixes silently don't appear. -->
-<link rel="stylesheet" href="style.css?v=7" />
+<link rel="stylesheet" href="style.css?v=9" />
 </head>
 <body>
   <div id="app">
@@ -29,6 +29,7 @@
       <div class="tab-group" data-accent="squad">
         <span class="tab-group-label">My Squad</span>
         <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+        <button class="tab-btn" data-tab="swaps" role="tab" aria-selected="false">Suggested Swaps</button>
         <button class="tab-btn" data-tab="journey" role="tab" aria-selected="false">Season Journey</button>
         <button class="tab-btn" data-tab="chips" role="tab" aria-selected="false">Chip Squad</button>
       </div>
@@ -50,15 +51,6 @@
           <span class="window-control-label">Show next:</span>
           <div id="window-length-buttons" class="recs-tabs"></div>
         </div>
-      </section>
-
-      <section class="card">
-        <div class="card-title">Suggested Swaps</div>
-        <p class="rec-explainer">
-          Best same-position replacement for each of your 15, within your bank — a targeted swap
-          search, not a full rebuild (Wildcard/Free Hit cover that). Click any name for full detail.
-        </p>
-        <div id="swap-suggestions-list"></div>
       </section>
 
       <section class="card">
@@ -91,10 +83,11 @@
       <section class="card">
         <div class="card-title">Team xG &amp; Clean Sheet Projections</div>
         <p class="rec-explainer">
-          Poisson-based projection from FPL's own attack/defence strength ratings — the same
-          inputs behind FPL's FDR — compared against the current league average. Clean sheet %
-          is the standard P(0 goals conceded) = e<sup>-λ</sup> formula, not a guess. Updates with
-          the window control above.
+          Poisson-based projection from this season's actual results — goals scored and conceded
+          in finished fixtures so far, blended toward the league average early in the season when
+          a team's sample is still thin (this fades out automatically as more games are played).
+          Clean sheet % is the standard P(0 goals conceded) = e<sup>-λ</sup> formula, not a guess.
+          Updates with the window control above.
         </p>
         <div class="table-wrap" style="max-height:420px;">
           <table id="projections-table">
@@ -109,24 +102,21 @@
           </table>
         </div>
       </section>
+    </section>
 
+    <!-- SUGGESTED SWAPS TAB -->
+    <section id="tab-swaps" class="tab-panel" hidden>
       <section class="card">
-        <div class="card-title">Value &amp; DefCon Leaderboard</div>
-        <p class="rec-explainer">Top 8 by points-per-million and by defensive contribution per 90 — filtered to players who've actually played minutes. Click a name for full detail.</p>
-        <div class="leaderboard-grid">
-          <div>
-            <div class="leaderboard-subtitle">Best PPM</div>
-            <div id="ppm-leaderboard"></div>
-          </div>
-          <div>
-            <div class="leaderboard-subtitle">Best DC/90</div>
-            <div id="defcon-leaderboard"></div>
-          </div>
-        </div>
+        <div class="card-title">Suggested Swaps</div>
+        <p class="rec-explainer">
+          Best same-position replacement for each of your 15, within your bank — a targeted swap
+          search, not a full rebuild (Wildcard/Free Hit cover that). Click any name for full detail.
+        </p>
+        <div id="swap-suggestions-list"></div>
       </section>
     </section>
 
-    <!-- PLAYERS TAB (All Players + Attacking/Defending, merged) -->
+    <!-- PLAYERS TAB (All Players + Attacking/Defending + Leaderboard) -->
     <section id="tab-players" class="tab-panel" hidden>
       <section class="card">
         <p class="rec-explainer">
@@ -139,7 +129,7 @@
       </section>
       <section class="card">
         <div id="column-group-tabs" class="recs-tabs"></div>
-        <div class="filters">
+        <div id="players-filters" class="filters">
           <input id="search" type="text" placeholder="Search player…" />
           <select id="pos-filter">
             <option value="">All positions</option>
@@ -155,7 +145,7 @@
             <option value="flag">Flagged (injury/doubt)</option>
           </select>
         </div>
-        <div class="table-wrap">
+        <div id="players-table-wrap" class="table-wrap">
           <table id="player-table">
             <thead>
               <tr id="player-table-head"></tr>
@@ -164,6 +154,19 @@
           </table>
         </div>
         <div id="row-count" class="row-count"></div>
+        <div id="players-leaderboard-wrap" hidden>
+          <p class="rec-explainer">Top 8 by points-per-million and by defensive contribution per 90 — filtered to players who've actually played minutes. Click a name for full detail.</p>
+          <div class="leaderboard-grid">
+            <div>
+              <div class="leaderboard-subtitle">Best PPM</div>
+              <div id="ppm-leaderboard"></div>
+            </div>
+            <div>
+              <div class="leaderboard-subtitle">Best DC/90</div>
+              <div id="defcon-leaderboard"></div>
+            </div>
+          </div>
+        </div>
       </section>
     </section>
 
@@ -244,6 +247,6 @@
 
     <footer class="footer">Data from the official Fantasy Premier League API · refreshes automatically via GitHub Actions</footer>
   </div>
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>
