@@ -409,6 +409,7 @@ tr.flagged .name-cell { color: var(--chalk-dim); }
   display: flex; align-items: center; justify-content: center;
   padding: 16px;
 }
+.modal-overlay[hidden] { display: none; }
 .modal-card {
   position: relative;
   background: var(--ink-card);
